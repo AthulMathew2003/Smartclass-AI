@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --background: #fcf9f8;
+    --on-background: #1c1b1b;
+    --surface: #fcf9f8;
+    --on-surface: #1c1b1b;
+    --on-surface-variant: #404945;
+    --surface-container: #f0edec;
+    --surface-container-low: #f6f3f2;
+    --surface-container-high: #ebe7e7;
+    --surface-container-highest: #e5e2e1;
+    --surface-variant: #e5e2e1;
+    --primary: #154539;
+    --on-primary: #ffffff;
+    --primary-container: #2f5d50;
+    --on-primary-container: #a3d4c3;
+    --primary-fixed: #bceddc;
+    --primary-fixed-dim: #a0d1c0;
+    --on-primary-fixed: #002019;
+    --secondary: #97480f;
+    --on-secondary: #ffffff;
+    --secondary-container: #ff9a5c;
+    --on-secondary-container: #733200;
+    --secondary-fixed: #ffdbc9;
+    --secondary-fixed-dim: #ffb68d;
+    --tertiary: #2a4600;
+    --on-tertiary: #ffffff;
+    --tertiary-container: #3b5f00;
+    --on-tertiary-container: #abd970;
+    --tertiary-fixed: #c3f185;
+    --tertiary-fixed-dim: #a7d56c;
+    --on-tertiary-fixed: #112000;
+    --inverse-surface: #313030;
+    --inverse-on-surface: #f3f0ef;
+    --outline: #717975;
+    --outline-variant: #c0c8c4;
+  }
+
+  .dark {
+    --background: #141816;
+    --on-background: #e1e4e1;
+    --surface: #141816;
+    --on-surface: #e1e4e1;
+    --on-surface-variant: #c0c8c4;
+    --surface-container: #1b211e;
+    --surface-container-low: #171d1a;
+    --surface-container-high: #252c28;
+    --surface-container-highest: #2f3732;
+    --surface-variant: #3f4944;
+    --primary: #a0d1c0;
+    --on-primary: #00372d;
+    --primary-container: #154539;
+    --on-primary-container: #bceddc;
+    --secondary-container: #733200;
+    --on-secondary-container: #ffdbc9;
+    --tertiary-fixed: #304f00;
+    --on-tertiary-fixed: #c3f185;
+    --inverse-surface: #fcf9f8;
+    --inverse-on-surface: #1c1b1b;
+  }
+}
+
+body {
+  background-color: var(--background);
+  color: var(--on-surface);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Material Symbols Outlined Customization */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.material-symbols-filled {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Organic Path Animation */
+.organic-path {
+  stroke: #c3f185;
+  stroke-width: 2;
+  fill: none;
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: dash 5s linear infinite forwards;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface-container-low);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
+}
+
+/* Card Zoom & Hover Effects */
+.bento-card-zoom:hover img {
+  transform: scale(1.05);
+}
+
+.glass-nav {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}

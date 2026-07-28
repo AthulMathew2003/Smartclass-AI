@@ -1,0 +1,122 @@
+# 1. Organizations
+Tenant container (School, College, Company, Tutor, or Solo Learner container).
+
+| Column     | Type      | Description                            |
+| ---------- | --------- | -------------------------------------- |
+| id         | UUID (PK) | Organization ID                        |
+| name       | VARCHAR   | Institution / Company / Personal Name  |
+| type       | VARCHAR   | School/College/Company/Tutor/Learner   |
+| created_at | TIMESTAMP | Created Time                           |
+
+---
+
+# 2. Users
+User accounts for admins, educators, and learners.
+
+| Column          | Type      | Description                               |
+| --------------- | --------- | ----------------------------------------- |
+| id              | UUID (PK) | User ID                                   |
+| organization_id | UUID (FK) | References Organizations (Nullable)       |
+| name            | VARCHAR   | Full Name                                 |
+| email           | VARCHAR   | User Email (Unique)                       |
+| password_hash   | TEXT      | Password Hash                             |
+| role            | VARCHAR   | System Role (`Admin`, `Educator`, `Learner`) |
+| created_at      | TIMESTAMP | Created Time                              |
+
+---
+
+# 3. Learning Spaces
+The core container for any course, class, batch, or workshop.
+
+| Column          | Type      | Description                               |
+| --------------- | --------- | ----------------------------------------- |
+| id              | UUID (PK) | Space ID                                  |
+| organization_id | UUID (FK) | References Organizations (Nullable)       |
+| title           | VARCHAR   | Space Title (e.g. Calculus I, Batch A)    |
+| description     | TEXT      | Space Description                         |
+| created_by      | UUID (FK) | References Users (Owner/Creator)          |
+| created_at      | TIMESTAMP | Created Time                              |
+
+---
+
+# 4. Space Members
+Links educators and learners to a Learning Space.
+
+| Column        | Type      | Description                               |
+| ------------- | --------- | ----------------------------------------- |
+| id            | UUID (PK) | Membership ID                             |
+| space_id      | UUID (FK) | References Learning Spaces                |
+| user_id       | UUID (FK) | References Users                          |
+| role_in_space | VARCHAR   | Role in Space (`Instructor`, `Learner`)   |
+| joined_at     | TIMESTAMP | Enrollment Time                           |
+
+---
+
+# 5. Learning Resources
+Course materials (PDFs, Videos, Notes) uploaded to a space.
+
+| Column      | Type      | Description                               |
+| ----------- | --------- | ----------------------------------------- |
+| id          | UUID (PK) | Resource ID                               |
+| space_id    | UUID (FK) | References Learning Spaces                |
+| uploaded_by | UUID (FK) | References Users                          |
+| title       | VARCHAR   | Resource Title                            |
+| file_url    | TEXT      | File URL / Storage Path                   |
+| type        | VARCHAR   | File Type (`pdf`, `video`, `link`, etc.)  |
+| uploaded_at | TIMESTAMP | Upload Time                               |
+
+---
+
+# 6. Live Sessions
+Live video classes or WebRTC rooms scheduled within a space.
+
+| Column        | Type      | Description                               |
+| ------------- | --------- | ----------------------------------------- |
+| id            | UUID (PK) | Session ID                                |
+| space_id      | UUID (FK) | References Learning Spaces                |
+| host_id       | UUID (FK) | References Users (Host/Instructor)        |
+| title         | VARCHAR   | Session Title                             |
+| room_id       | VARCHAR   | Video Conference Room ID                  |
+| start_time    | TIMESTAMP | Session Start                             |
+| end_time      | TIMESTAMP | Session End                               |
+| status        | VARCHAR   | Session Status (`Scheduled`, `Live`, `Ended`)|
+
+---
+
+# 7. Assignments
+Homework, tasks, or projects assigned to a Learning Space.
+
+| Column      | Type      | Description                               |
+| ----------- | --------- | ----------------------------------------- |
+| id          | UUID (PK) | Assignment ID                             |
+| space_id    | UUID (FK) | References Learning Spaces                |
+| created_by  | UUID (FK) | References Users                          |
+| title       | VARCHAR   | Assignment Title                          |
+| description | TEXT      | Instructions                              |
+| due_date    | TIMESTAMP | Deadline                                  |
+| total_marks | INT       | Maximum Marks                             |
+
+---
+
+# 8. Assignment Submissions
+Student coursework submissions and grading.
+
+| Column        | Type      | Description                               |
+| ------------- | --------- | ----------------------------------------- |
+| id            | UUID (PK) | Submission ID                             |
+| assignment_id | UUID (FK) | References Assignments                    |
+| student_id    | UUID (FK) | References Users                          |
+| file_url      | TEXT      | Submitted File URL                        |
+| submitted_at  | TIMESTAMP | Submission Time                           |
+| marks         | DECIMAL   | Score Awarded                             |
+
+---
+
+# Core Database Relationships
+
+```text
+Organizations ── Users ── Space Members ── Learning Spaces
+                                                  ├── Learning Resources
+                                                  ├── Live Sessions
+                                                  └── Assignments ── Submissions
+```
