@@ -48,15 +48,20 @@ def _set_refresh_cookie(response: Response, token: str, expires_at: datetime):
         key=COOKIE_REFRESH,
         value=token,
         httponly=True,
-        secure=settings.ENVIRONMENT != "development",
-        samesite="lax",
+        secure=True,
+        samesite="none",
         max_age=max_age,
         path="/"
     )
 
 
 def _clear_refresh_cookie(response: Response):
-    response.delete_cookie(key=COOKIE_REFRESH, path="/")
+    response.delete_cookie(
+        key=COOKIE_REFRESH,
+        path="/",
+        secure=True,
+        samesite="none"
+    )
 
 
 @router.post("/register", response_model=TokenResponse)
