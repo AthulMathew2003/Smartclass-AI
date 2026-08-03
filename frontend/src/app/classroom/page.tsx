@@ -30,6 +30,9 @@ export default function ClassroomDashboardPage() {
         router.replace("/select-org");
         return;
       }
+      if (st.organization_id) {
+        localStorage.setItem("activeOrganizationId", st.organization_id);
+      }
       setStatus(st);
       setLoading(false);
     };

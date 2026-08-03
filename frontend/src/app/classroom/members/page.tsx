@@ -552,22 +552,26 @@ export default function MembersManagementPage() {
                       >
                         Edit
                       </button>
-                      <button
-                        onClick={() => toggleStatus(m)}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                          m.status === "active"
-                            ? "border-red-500/30 text-red-500 hover:bg-red-500/10"
-                            : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
-                        }`}
-                      >
-                        {m.status === "active" ? "Suspend" : "Activate"}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteMember(m)}
-                        className="px-3.5 py-1.5 rounded-full border border-red-500/20 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-all cursor-pointer"
-                      >
-                        Remove
-                      </button>
+                      {m.role_name.toLowerCase() !== "owner" && (
+                        <>
+                          <button
+                            onClick={() => toggleStatus(m)}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                              m.status === "active"
+                                ? "border-red-500/30 text-red-500 hover:bg-red-500/10"
+                                : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
+                            }`}
+                          >
+                            {m.status === "active" ? "Suspend" : "Activate"}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMember(m)}
+                            className="px-3.5 py-1.5 rounded-full border border-red-500/20 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-all cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -748,7 +752,8 @@ export default function MembersManagementPage() {
                 <select
                   value={editRole}
                   onChange={(e) => setEditRole(e.target.value)}
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)]"
+                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={selectedMember?.role_name.toLowerCase() === "owner"}
                   required
                 >
                   {roles.map((r) => (
