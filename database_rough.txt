@@ -1,0 +1,840 @@
+
+Authentication
+1. tbl_users
+One row per person. One email = one user, regardless of whether they sign in with a password, Google, or GitHub.
+Column
+Type
+Description
+user_id
+UUID (PK)
+User ID
+user_email
+VARCHAR(255), UNIQUE
+Login email - the single identity a person is matched on
+user_password_hash
+TEXT, NULLABLE
+Set only if the user registered with email + password
+user_first_name
+VARCHAR(100)
+First name
+user_last_name
+VARCHAR(100)
+Last name
+user_profile_image
+TEXT
+Avatar URL
+user_phone
+VARCHAR(20)
+Contact number
+user_email_verified
+BOOLEAN
+Whether the email address has been verified
+user_status
+ENUM
+active, suspended, deleted
+user_last_login_at
+TIMESTAMP
+Last successful login
+user_created_at
+TIMESTAMP
+Created time
+user_updated_at
+TIMESTAMP
+Updated time
+
+
+2. tbl_oauth_accounts
+Links a Google or GitHub login to a tbl_users account, so the same person can sign in with either provider or with a password.
+Column
+Type
+Description
+oauth_account_id
+UUID (PK)
+OAuth link ID
+oauth_account_user_id
+UUID (FK -> tbl_users.user_id)
+Owning user account
+oauth_account_provider
+ENUM
+google, github
+oauth_account_provider_user_id
+VARCHAR
+Unique ID returned by the provider
+oauth_account_created_at
+TIMESTAMP
+When this login method was linked
+
+Unique constraint
+(oauth_account_provider, oauth_account_provider_user_id) - the same provider account can never be linked to two different users
+
+3. tbl_refresh_tokens
+Recommended addition for JWT-based auth. Access tokens stay short-lived and stateless; refresh tokens are stored so they can be revoked (e.g. on logout or password change).
+Column
+Type
+Description
+refresh_token_id
+UUID (PK)
+Token row ID
+refresh_token_user_id
+UUID (FK -> tbl_users.user_id)
+Owning user
+refresh_token_hash
+TEXT
+Hashed refresh token (never store it raw)
+refresh_token_expires_at
+TIMESTAMP
+Expiry time
+refresh_token_revoked_at
+TIMESTAMP, NULLABLE
+Set when the token is revoked before expiry
+refresh_token_created_at
+TIMESTAMP
+Created time
+
+
+Organization
+4. tbl_organizations
+Schools, colleges, coaching centres, companies, etc. A user can belong to more than one, via tbl_organization_members.
+Column
+Type
+Description
+organization_id
+UUID (PK)
+Organization ID
+organization_name
+VARCHAR
+Display name
+organization_slug
+VARCHAR, UNIQUE
+URL-friendly identifier
+organization_logo
+TEXT
+Logo URL
+organization_description
+TEXT
+Description
+organization_owner_user_id
+UUID (FK -> tbl_users.user_id)
+Owner
+organization_status
+ENUM
+active, suspended, etc.
+organization_created_at
+TIMESTAMP
+Created time
+organization_updated_at
+TIMESTAMP
+Updated time
+
+
+5. tbl_roles
+Roles are organization-specific: role_organization_id is nullable so built-in system roles stay global, while each organization can also define its own custom roles.
+Column
+Type
+Description
+role_id
+UUID (PK)
+Role ID
+role_organization_id
+UUID, NULLABLE (FK -> tbl_organizations.organization_id)
+NULL for a global system role; set for an organization's own custom role
+role_name
+VARCHAR
+Owner, Admin, Teacher, Student, or a custom name
+role_description
+TEXT
+Description
+role_is_system
+BOOLEAN
+True for built-in roles that ship with the product
+role_created_at
+TIMESTAMP
+Created time
+role_updated_at
+TIMESTAMP
+Updated time
+
+Examples
+Owner
+Admin
+Teacher
+Student
+Coordinator
+Mentor
+
+6. tbl_permissions
+Individual capabilities that can be granted to a role.
+Column
+Type
+Description
+permission_id
+UUID (PK)
+Permission ID
+permission_name
+VARCHAR
+e.g. manage_users, grade_assignment
+permission_description
+TEXT
+Description
+
+Examples
+manage_users
+create_workspace
+grade_assignment
+manage_roles
+start_live_class
+
+7. tbl_role_permissions
+Many-to-many join between roles and permissions.
+Column
+Type
+Description
+role_permission_id
+UUID (PK)
+Row ID
+role_permission_role_id
+UUID (FK -> tbl_roles.role_id)
+Role
+role_permission_permission_id
+UUID (FK -> tbl_permissions.permission_id)
+Permission
+
+
+8. tbl_organization_members
+Who belongs to an organization, and with which role.
+Column
+Type
+Description
+organization_member_id
+UUID (PK)
+Row ID
+organization_member_organization_id
+UUID (FK -> tbl_organizations.organization_id)
+Organization
+organization_member_user_id
+UUID (FK -> tbl_users.user_id)
+User
+organization_member_role_id
+UUID (FK -> tbl_roles.role_id)
+Role within the organization
+organization_member_status
+ENUM
+pending, active, suspended
+organization_member_joined_at
+TIMESTAMP
+When they joined
+organization_member_created_at
+TIMESTAMP
+Created time
+organization_member_updated_at
+TIMESTAMP
+Updated time
+
+Unique constraint
+(organization_member_user_id, organization_member_organization_id) - a user has exactly one membership row per organization
+
+9. tbl_invitations
+Pending invites to join an organization.
+Column
+Type
+Description
+invitation_id
+UUID (PK)
+Invitation ID
+invitation_organization_id
+UUID (FK -> tbl_organizations.organization_id)
+Organization
+invitation_email
+VARCHAR
+Invitee email
+invitation_role_id
+UUID (FK -> tbl_roles.role_id)
+Role to assign on acceptance
+invitation_token
+VARCHAR
+Secure invite token
+invitation_status
+ENUM
+pending, accepted, expired, revoked
+invitation_expiry
+TIMESTAMP
+Expiry time
+invitation_created_by
+UUID (FK -> tbl_users.user_id)
+Who sent it
+invitation_created_at
+TIMESTAMP
+Created time
+
+
+Workspace
+10. tbl_workspaces
+Represents a class, subject, batch, or course inside an organization.
+Column
+Type
+Description
+workspace_id
+UUID (PK)
+Workspace ID
+workspace_organization_id
+UUID (FK -> tbl_organizations.organization_id)
+Owning organization
+workspace_name
+VARCHAR
+Name
+workspace_description
+TEXT
+Description
+workspace_banner
+TEXT
+Banner image URL
+workspace_status
+ENUM
+active, archived
+workspace_created_by
+UUID (FK -> tbl_users.user_id)
+Creator
+workspace_created_at
+TIMESTAMP
+Created time
+workspace_updated_at
+TIMESTAMP
+Updated time
+
+
+11. tbl_workspace_members
+workspace_member_role_id is a foreign key to tbl_roles, so a teacher's or student's permissions stay consistent with the organization's role system.
+Column
+Type
+Description
+workspace_member_id
+UUID (PK)
+Row ID
+workspace_member_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+workspace_member_user_id
+UUID (FK -> tbl_users.user_id)
+User
+workspace_member_role_id
+UUID (FK -> tbl_roles.role_id)
+Role within this workspace
+workspace_member_joined_at
+TIMESTAMP
+When they joined
+
+
+Live Class
+12. tbl_live_classes
+Column
+Type
+Description
+live_class_id
+UUID (PK)
+Live class ID
+live_class_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+live_class_title
+VARCHAR
+Title
+live_class_description
+TEXT
+Description
+live_class_host_user_id
+UUID (FK -> tbl_users.user_id)
+Host / teacher
+live_class_start_time
+TIMESTAMP
+Start time
+live_class_end_time
+TIMESTAMP
+End time
+live_class_status
+ENUM
+scheduled, live, ended, cancelled
+live_class_meeting_id
+VARCHAR
+Video provider meeting ID
+live_class_recording_url
+TEXT
+Recording URL
+live_class_created_at
+TIMESTAMP
+Created time
+
+
+13. tbl_live_class_participants
+Column
+Type
+Description
+participant_id
+UUID (PK)
+Row ID
+participant_live_class_id
+UUID (FK -> tbl_live_classes.live_class_id)
+Live class
+participant_user_id
+UUID (FK -> tbl_users.user_id)
+Participant
+participant_join_time
+TIMESTAMP
+Joined at
+participant_leave_time
+TIMESTAMP
+Left at
+participant_attendance_percentage
+DECIMAL
+Percentage of the class attended
+
+
+Attendance
+14. tbl_attendance
+Column
+Type
+Description
+attendance_id
+UUID (PK)
+Attendance ID
+attendance_live_class_id
+UUID (FK -> tbl_live_classes.live_class_id)
+Live class
+attendance_user_id
+UUID (FK -> tbl_users.user_id)
+Student
+attendance_present
+BOOLEAN
+Marked present
+attendance_face_verified
+BOOLEAN
+Verified via face check
+attendance_duration
+INTEGER
+Seconds attended
+attendance_confidence
+DECIMAL
+Confidence score of the verification
+attendance_created_at
+TIMESTAMP
+Created time
+
+
+15. tbl_behaviour_analysis
+Column
+Type
+Description
+behaviour_id
+UUID (PK)
+Row ID
+behaviour_live_class_id
+UUID (FK -> tbl_live_classes.live_class_id)
+Live class
+behaviour_user_id
+UUID (FK -> tbl_users.user_id)
+Student
+behaviour_attention_score
+DECIMAL
+Attention score
+behaviour_engagement_score
+DECIMAL
+Engagement score
+behaviour_distraction_score
+DECIMAL
+Distraction score
+behaviour_face_detected
+BOOLEAN
+Whether a face was detected
+behaviour_created_at
+TIMESTAMP
+Created time
+
+
+Resources
+16. tbl_resources
+Column
+Type
+Description
+resource_id
+UUID (PK)
+Resource ID
+resource_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+resource_title
+VARCHAR
+Title
+resource_description
+TEXT
+Description
+resource_type
+ENUM
+PDF, Video, PPT, Image
+resource_file_url
+TEXT
+File URL
+resource_uploaded_by
+UUID (FK -> tbl_users.user_id)
+Uploader
+resource_created_at
+TIMESTAMP
+Created time
+
+
+Assignments
+17. tbl_assignments
+Column
+Type
+Description
+assignment_id
+UUID (PK)
+Assignment ID
+assignment_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+assignment_title
+VARCHAR
+Title
+assignment_description
+TEXT
+Description
+assignment_due_date
+TIMESTAMP
+Due date
+assignment_total_marks
+INTEGER
+Total marks
+assignment_created_by
+UUID (FK -> tbl_users.user_id)
+Creator
+assignment_created_at
+TIMESTAMP
+Created time
+
+
+18. tbl_assignment_submissions
+Column
+Type
+Description
+submission_id
+UUID (PK)
+Submission ID
+submission_assignment_id
+UUID (FK -> tbl_assignments.assignment_id)
+Assignment
+submission_student_id
+UUID (FK -> tbl_users.user_id)
+Student
+submission_file_url
+TEXT
+Submitted file URL
+submission_score
+DECIMAL
+Score awarded
+submission_feedback
+TEXT
+Feedback
+submission_submitted_at
+TIMESTAMP
+Submitted at
+
+
+Exams
+19. tbl_exams
+Column
+Type
+Description
+exam_id
+UUID (PK)
+Exam ID
+exam_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+exam_title
+VARCHAR
+Title
+exam_description
+TEXT
+Description
+exam_duration
+INTEGER
+Duration in minutes
+exam_total_marks
+INTEGER
+Total marks
+exam_start_time
+TIMESTAMP
+Start time
+exam_end_time
+TIMESTAMP
+End time
+exam_created_by
+UUID (FK -> tbl_users.user_id)
+Creator
+exam_created_at
+TIMESTAMP
+Created time
+
+
+20. tbl_exam_questions
+Column
+Type
+Description
+question_id
+UUID (PK)
+Question ID
+question_exam_id
+UUID (FK -> tbl_exams.exam_id)
+Exam
+question_type
+ENUM
+MCQ, short_answer, true_false, etc.
+question_question
+TEXT
+Question text
+question_options
+TEXT / JSON
+Answer options, for MCQ-type questions
+question_answer
+TEXT
+Correct answer
+question_marks
+INTEGER
+Marks for this question
+
+
+21. tbl_exam_attempts
+Column
+Type
+Description
+attempt_id
+UUID (PK)
+Attempt ID
+attempt_exam_id
+UUID (FK -> tbl_exams.exam_id)
+Exam
+attempt_student_id
+UUID (FK -> tbl_users.user_id)
+Student
+attempt_score
+DECIMAL
+Score achieved
+attempt_started_at
+TIMESTAMP
+Started at
+attempt_completed_at
+TIMESTAMP
+Completed at
+
+
+Notifications
+22. tbl_notifications
+Column
+Type
+Description
+notification_id
+UUID (PK)
+Notification ID
+notification_user_id
+UUID (FK -> tbl_users.user_id)
+Recipient
+notification_title
+VARCHAR
+Title
+notification_message
+TEXT
+Message
+notification_type
+ENUM
+info, alert, reminder, etc.
+notification_read
+BOOLEAN
+Whether it has been read
+notification_created_at
+TIMESTAMP
+Created time
+
+
+AI
+23. tbl_ai_conversations
+Column
+Type
+Description
+conversation_id
+UUID (PK)
+Conversation ID
+conversation_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+conversation_user_id
+UUID (FK -> tbl_users.user_id)
+Student
+conversation_title
+VARCHAR
+Title
+conversation_created_at
+TIMESTAMP
+Created time
+
+
+24. tbl_ai_messages
+Column
+Type
+Description
+message_id
+UUID (PK)
+Message ID
+message_conversation_id
+UUID (FK -> tbl_ai_conversations.conversation_id)
+Conversation
+message_role
+ENUM
+user, assistant
+message_content
+TEXT
+Message content
+message_created_at
+TIMESTAMP
+Created time
+
+
+Analytics
+25. tbl_learning_twins
+Column
+Type
+Description
+learning_twin_id
+UUID (PK)
+Row ID
+learning_twin_user_id
+UUID (FK -> tbl_users.user_id)
+Student
+learning_twin_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+learning_twin_strengths
+TEXT
+Identified strengths
+learning_twin_weaknesses
+TEXT
+Identified weaknesses
+learning_twin_learning_style
+VARCHAR
+e.g. visual, auditory, kinesthetic
+learning_twin_last_updated
+TIMESTAMP
+Last updated
+
+
+26. tbl_learning_graph
+Column
+Type
+Description
+learning_graph_id
+UUID (PK)
+Row ID
+learning_graph_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+learning_graph_topic
+VARCHAR
+Topic name
+learning_graph_parent_topic
+UUID, NULLABLE (FK -> tbl_learning_graph.learning_graph_id)
+Parent topic, for building a topic hierarchy
+learning_graph_order
+INTEGER
+Display / teaching order
+
+
+27. tbl_student_progress
+Column
+Type
+Description
+progress_id
+UUID (PK)
+Row ID
+progress_user_id
+UUID (FK -> tbl_users.user_id)
+Student
+progress_workspace_id
+UUID (FK -> tbl_workspaces.workspace_id)
+Workspace
+progress_completion
+DECIMAL
+Percentage of workspace content completed
+progress_average_score
+DECIMAL
+Average score across assignments/exams
+progress_attendance_percentage
+DECIMAL
+Overall attendance percentage
+progress_last_updated
+TIMESTAMP
+Last updated
+
+
+Audit
+28. tbl_audit_logs
+Column
+Type
+Description
+audit_log_id
+UUID (PK)
+Log ID
+audit_log_user_id
+UUID (FK -> tbl_users.user_id)
+Actor
+audit_log_organization_id
+UUID, NULLABLE (FK -> tbl_organizations.organization_id)
+Organization context, if any
+audit_log_action
+VARCHAR
+Action performed
+audit_log_entity
+VARCHAR
+Entity type affected
+audit_log_entity_id
+UUID
+Entity ID affected
+audit_log_ip
+VARCHAR(45)
+IP address
+audit_log_created_at
+TIMESTAMP
+Created time
+
+
+Relationship Overview
+tbl_users
+  |
+  +-- tbl_oauth_accounts
+  +-- tbl_refresh_tokens
+  +-- tbl_organization_members
+  |         |
+  |         v
+  |    tbl_organizations
+  |         |
+  |         +-- tbl_roles
+  |         |      |
+  |         |      +-- tbl_role_permissions
+  |         |
+  |         +-- tbl_workspaces
+  |         |      +-- tbl_workspace_members
+  |         |      +-- tbl_resources
+  |         |      +-- tbl_assignments
+  |         |      +-- tbl_exams
+  |         |      +-- tbl_live_classes
+  |         |      +-- tbl_ai_conversations
+  |         |      +-- tbl_learning_graph
+  |         |
+  |         +-- tbl_invitations
+  |
+  +-- tbl_attendance
+  +-- tbl_behaviour_analysis
+  +-- tbl_notifications
+  +-- tbl_learning_twins
+  +-- tbl_student_progress
+  +-- tbl_audit_logs
+Future Improvement
+For long-term scalability, consider adding a tbl_workspace_roles table (or a permissions-override table) if different permissions are ever needed within different workspaces - for example, a teacher who is an "Instructor" in one workspace but only a "Teaching Assistant" in another.
+If that flexibility isn't needed yet, the current organization-level roles plus workspace membership are sufficient, and keep the design simpler.

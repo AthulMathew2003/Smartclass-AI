@@ -1,0 +1,32 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+frontend/.env.local
+
+# Next.js Build
+.next/
+out/
+
+# Node Modules
+node_modules/
+
+# OS Files
+.DS_Store
+Thumbs.db
