@@ -165,7 +165,11 @@ export async function refreshAuthSession(): Promise<{ accessToken: string; user:
 }
 
 export async function fetchCurrentUser(): Promise<UserProfile | null> {
-  const token = getMemoryAccessToken();
+  let token = getMemoryAccessToken();
+  if (!token) {
+    const session = await refreshAuthSession();
+    token = session?.accessToken || null;
+  }
   if (!token) return null;
 
   try {
