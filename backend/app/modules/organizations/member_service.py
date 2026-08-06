@@ -2,7 +2,7 @@ import uuid
 import secrets
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.modules.users.models import User
+from app.modules.users.models import User, UserStatus
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 from app.modules.organizations.models import Organization, OrganizationMember, Role, OrganizationMemberStatus

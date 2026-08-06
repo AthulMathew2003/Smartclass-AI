@@ -10,7 +10,7 @@ import httpx
 from app.db.session import get_db
 from app.core.config import settings
 from app.core.security import verify_password
-from app.core.exceptions import UnauthorizedException, ConflictException, NotFoundException
+from app.core.exceptions import UnauthorizedException, ConflictException, NotFoundException, ForbiddenException
 from app.modules.users.schemas import UserInfo
 from app.modules.users.models import User, UserStatus
 from app.modules.users.repository import UserRepository
@@ -110,6 +110,9 @@ async def login(payload: LoginRequest, response: Response, db: AsyncSession = De
     if not verify_password(payload.password, user.user_password_hash):
         raise UnauthorizedException("Invalid email or password.")
 
+    if user.user_status == UserStatus.SUSPENDED:
+        raise ForbiddenException("User account is suspended.")
+
     # Update last login
     await user_repo.update(user, user_last_login_at=datetime.now(timezone.utc))
 
@@ -190,6 +193,10 @@ async def google_callback(
         user_repo = UserRepository(db)
         auth_service = AuthService(db)
         user = await user_repo.get_by_email(email)
+
+        if user and user.user_status == UserStatus.SUSPENDED:
+            err_msg = urllib.parse.quote("User account is suspended.")
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?error={err_msg}")
 
         if not user:
             if action == "register":
@@ -305,6 +312,10 @@ async def github_callback(
         auth_service = AuthService(db)
         user = await user_repo.get_by_email(email)
 
+        if user and user.user_status == UserStatus.SUSPENDED:
+            err_msg = urllib.parse.quote("User account is suspended.")
+            return RedirectResponse(url=f"{settings.FRONTEND_URL}/login?error={err_msg}")
+
         provider_user_id = str(profile["id"])
 
         if not user:
@@ -368,6 +379,9 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
     user = await user_repo.get_by_id(token_row.refresh_token_user_id)
     if not user:
         raise UnauthorizedException("User not found.")
+
+    if user.user_status == UserStatus.SUSPENDED:
+        raise UnauthorizedException("User account is suspended.")
 
     # Revoke old token
     await auth_service.repo.revoke_refresh_token(token_row)

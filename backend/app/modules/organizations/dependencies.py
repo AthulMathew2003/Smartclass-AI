@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.modules.users.models import User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.organizations.repository import OrganizationRepository
+from app.modules.organizations.models import OrganizationMemberStatus
 from app.core.exceptions import ForbiddenException, ConflictException
 
 
@@ -27,9 +28,14 @@ async def get_active_organization_id(
             raise ForbiddenException("Invalid organization ID format.")
             
         # Verify user belongs to this organization
-        membership = await repo.get_organization_member_by_user_id(org_uuid, current_user.user_id)
-        if not membership:
+        data = await repo.get_organization_member_by_user_id(org_uuid, current_user.user_id)
+        if not data:
             raise ForbiddenException("Access denied to this organization.")
+            
+        user, membership, role = data
+        if membership.organization_member_status == OrganizationMemberStatus.SUSPENDED:
+            raise ForbiddenException("Your membership in this organization has been suspended.")
+            
         return org_uuid
 
     # Fallback to first active membership

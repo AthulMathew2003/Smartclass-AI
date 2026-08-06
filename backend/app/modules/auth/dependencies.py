@@ -3,7 +3,7 @@ from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
-from app.modules.users.models import User
+from app.modules.users.models import User, UserStatus
 from app.modules.users.repository import UserRepository
 from app.modules.auth.jwt import decode_access_token
 from app.core.exceptions import UnauthorizedException
@@ -34,5 +34,8 @@ async def get_current_user(
     user = await user_repo.get_by_id(user_id)
     if not user:
         raise UnauthorizedException("User associated with this token not found.")
+
+    if user.user_status == UserStatus.SUSPENDED:
+        raise UnauthorizedException("User account is suspended.")
 
     return user

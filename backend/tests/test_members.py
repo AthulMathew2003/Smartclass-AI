@@ -125,6 +125,22 @@ async def test_member_management_flows(client: AsyncClient, db_session):
     assert status_res.status_code == 200
     assert status_res.json()["status"] == "suspended"
 
+    # Verify user status remains active globally
+    from app.modules.users.models import UserStatus
+    await db_session.refresh(res_user)
+    assert res_user.user_status == UserStatus.ACTIVE
+
+    # Verify access is forbidden for the suspended member
+    from app.modules.auth.jwt import create_access_token
+    lois_token = create_access_token(subject=str(res_user.user_id), email=res_user.user_email)
+    lois_headers = {
+        "Authorization": f"Bearer {lois_token}",
+        "X-Organization-Id": str(org_id)
+    }
+    res_workspaces = await client.get("/api/v1/workspaces", headers=lois_headers)
+    assert res_workspaces.status_code == 403
+    assert "suspended" in res_workspaces.json()["message"].lower()
+
     # 8. Remove Member (Soft Delete)
     del_res = await client.delete(f"/api/v1/organizations/members/{teacher_member_id}", headers=headers)
     assert del_res.status_code == 204
