@@ -35,20 +35,21 @@ class OrganizationRepository:
         result = await self.db.execute(stmt)
         return bool(result.scalar())
 
-    async def get_membership_by_user_id(self, user_id: uuid.UUID) -> Optional[OrganizationMember]:
-        """Fetch the first active organization membership for a user."""
+    async def get_membership(self, user_id: uuid.UUID, org_id: uuid.UUID) -> Optional[OrganizationMember]:
+        """Fetch a user's membership within a specific organization."""
         stmt = (
             select(OrganizationMember)
             .where(
                 OrganizationMember.organization_member_user_id == user_id,
+                OrganizationMember.organization_member_organization_id == org_id,
                 OrganizationMember.organization_member_status == OrganizationMemberStatus.ACTIVE
             )
         )
         result = await self.db.execute(stmt)
         return result.scalars().first()
 
-    async def get_all_memberships_by_user_id(self, user_id: uuid.UUID) -> List[OrganizationMember]:
-        """Fetch all active organization memberships for a user (supporting multi-organization layouts)."""
+    async def list_memberships(self, user_id: uuid.UUID) -> List[OrganizationMember]:
+        """Return all active organization memberships the user belongs to."""
         stmt = (
             select(OrganizationMember)
             .where(
@@ -58,6 +59,8 @@ class OrganizationRepository:
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+
 
     async def get_organization_members(
         self,
@@ -132,6 +135,10 @@ class OrganizationRepository:
         stmt = select(Workspace).where(Workspace.workspace_organization_id == org_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_workspace_by_id(self, workspace_id: uuid.UUID) -> Optional[Workspace]:
+        """Fetch a single workspace by ID."""
+        return await self.db.get(Workspace, workspace_id)
 
     async def get_user_workspace_assignments(
         self,

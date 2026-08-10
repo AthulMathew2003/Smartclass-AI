@@ -36,6 +36,8 @@
     --inverse-on-surface: #f3f0ef;
     --outline: #717975;
     --outline-variant: #c0c8c4;
+    --error: #ba1a1a;
+    --error-container: #ffdad6;
   }
 
   .dark {
@@ -62,15 +64,18 @@
   }
 }
 
+/* ── Base ───────────────────────────────────────────────────── */
 body {
   background-color: var(--background);
   color: var(--on-surface);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
   transition: background-color 0.3s ease, color 0.3s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Material Symbols Outlined Customization */
+/* ── Material Symbols ───────────────────────────────────────── */
 .material-symbols-outlined {
   font-family: 'Material Symbols Outlined';
   font-weight: normal;
@@ -91,7 +96,162 @@ body {
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-/* Organic Path Animation */
+/* ── Design System Component Classes ───────────────────────── */
+
+/* Cards */
+.ds-card {
+  background-color: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 40%, transparent);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.ds-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  transform: translateY(-1px);
+}
+
+/* Inputs */
+.ds-input {
+  width: 100%;
+  padding: 0.75rem 1.25rem;
+  background-color: var(--surface-container);
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 50%, transparent);
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--on-surface);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ds-input:focus {
+  border-color: var(--primary);
+}
+
+.ds-input::placeholder {
+  color: color-mix(in srgb, var(--on-surface-variant) 60%, transparent);
+}
+
+/* Buttons */
+.ds-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background-color: var(--primary);
+  color: var(--on-primary);
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: none;
+}
+
+.ds-btn-primary:hover {
+  background-color: var(--primary-container);
+}
+
+.ds-btn-primary:active {
+  transform: scale(0.98);
+}
+
+.ds-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ds-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background-color: transparent;
+  color: var(--on-surface);
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 60%, transparent);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.ds-btn-secondary:hover {
+  background-color: var(--surface-container);
+}
+
+.ds-btn-destructive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  background-color: transparent;
+  color: #dc2626;
+  border: 1px solid rgba(220,38,38,0.25);
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.ds-btn-destructive:hover {
+  background-color: rgba(220,38,38,0.06);
+}
+
+/* Badges */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.ds-badge-neutral {
+  background-color: var(--surface-container);
+  color: var(--on-surface);
+  border: 1px solid color-mix(in srgb, var(--outline-variant) 40%, transparent);
+}
+
+.ds-badge-active {
+  background-color: color-mix(in srgb, var(--tertiary-fixed) 25%, transparent);
+  color: var(--tertiary);
+}
+
+.ds-badge-suspended {
+  background-color: rgba(220,38,38,0.08);
+  color: #dc2626;
+}
+
+.ds-badge-pending {
+  background-color: rgba(151,72,15,0.1);
+  color: var(--secondary);
+}
+
+/* Section labels */
+.ds-section-label {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--on-surface-variant);
+}
+
+/* Divider */
+.ds-divider {
+  height: 1px;
+  background-color: color-mix(in srgb, var(--outline-variant) 40%, transparent);
+}
+
+/* ── Organic Path Animation ─────────────────────────────────── */
 .organic-path {
   stroke: #c3f185;
   stroke-width: 2;
@@ -107,28 +267,59 @@ body {
   }
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: var(--surface-container-low);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--outline-variant);
-  border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--outline);
+/* ── Animations ─────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Card Zoom & Hover Effects */
-.bento-card-zoom:hover img {
-  transform: scale(1.05);
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
+.animate-fade-in {
+  animation: fade-in 0.25s ease forwards;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.35s cubic-bezier(0.22,1,0.36,1) forwards;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface-container-low); }
+::-webkit-scrollbar-thumb { background: var(--outline-variant); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--outline); }
+
+/* ── Glass nav ──────────────────────────────────────────────── */
 .glass-nav {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--on-background);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--on-surface);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--on-surface);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--on-primary);
+  --color-secondary: var(--surface-container);
+  --color-secondary-foreground: var(--on-surface);
+  --color-muted: var(--surface-container-low);
+  --color-muted-foreground: var(--on-surface-variant);
+  --color-accent: var(--surface-container-high);
+  --color-accent-foreground: var(--on-surface);
+  --color-destructive: var(--error);
+  --color-destructive-foreground: var(--on-primary);
+  --color-border: var(--outline-variant);
+  --color-input: var(--outline-variant);
+  --color-ring: var(--primary);
+  --radius-sm: 0.125rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 1rem;
 }

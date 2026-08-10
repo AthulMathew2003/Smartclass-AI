@@ -10,6 +10,9 @@ from app.modules.organizations.schemas import OnboardingRequest, OrganizationBri
 from app.core.exceptions import ConflictException
 
 
+from fastapi import HTTPException
+from app.modules.organizations.constants import SystemRole
+
 class OrganizationService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -17,65 +20,16 @@ class OrganizationService:
         self.user_repo = UserRepository(db)
 
     async def get_user_organization_status(self, user: User, active_org_id: Optional[uuid.UUID] = None):
-        """Check if the user is associated with any active organization, listing all memberships."""
-        memberships = await self.repo.get_all_memberships_by_user_id(user.user_id)
-        if not memberships:
-            return {"has_organization": False, "multiple_organizations": False}
-
-        # Build brief details of all organizations they belong to
-        org_briefs = []
-        for m in memberships:
-            org = await self.db.get(Organization, m.organization_member_organization_id)
-            role = await self.db.get(Role, m.organization_member_role_id)
-            if org:
-                org_briefs.append(
-                    OrganizationBrief(
-                        organization_id=org.organization_id,
-                        organization_name=org.organization_name,
-                        organization_slug=org.organization_slug,
-                        role_name=role.role_name if role else "Member"
-                    )
-                )
-
-        # Select the active organization context
-        active_membership = None
-        if active_org_id:
-            # Match requested active organization
-            active_membership = next(
-                (m for m in memberships if m.organization_member_organization_id == active_org_id),
-                None
-            )
-        
-        # Default to first membership if none specified or not matched
-        if not active_membership:
-            active_membership = memberships[0]
-
-        active_org = await self.db.get(Organization, active_membership.organization_member_organization_id)
-        active_role = await self.db.get(Role, active_membership.organization_member_role_id)
-        
-        # Query workspace
-        ws_stmt = select(Workspace).join(WorkspaceMember).where(
-            WorkspaceMember.workspace_member_user_id == user.user_id,
-            Workspace.workspace_organization_id == active_org.organization_id
-        )
-        ws_res = await self.db.execute(ws_stmt)
-        workspace = ws_res.scalars().first()
-
-        return {
-            "has_organization": True,
-            "multiple_organizations": len(memberships) > 1,
-            "organizations": org_briefs,
-            "organization_id": active_org.organization_id,
-            "organization_name": active_org.organization_name,
-            "workspace_id": workspace.workspace_id if workspace else None,
-            "workspace_name": workspace.workspace_name if workspace else None,
-            "role": active_role.role_name if active_role else "Member"
-        }
+        """Check if the user owns any organization, returning onboarding status."""
+        stmt = select(Organization).where(Organization.organization_owner_user_id == user.user_id)
+        res = await self.db.execute(stmt)
+        org = res.scalars().first()
+        return {"has_organization": org is not None}
 
     async def complete_onboarding(self, user: User, payload: OnboardingRequest) -> Organization:
         """
         Atomically complete organization onboarding for the user.
-        Raises ConflictException if organization/slug already exists or user has an organization.
+        Raises ConflictException if organization/slug already exists or user already owns an organization.
         """
         # 1. Double check uniqueness
         if await self.repo.exists_by_name(payload.org_name):
@@ -83,10 +37,11 @@ class OrganizationService:
         if await self.repo.exists_by_slug(payload.org_slug):
             raise ConflictException("Organization URL slug is already taken.")
 
-        # 2. Check if user already has an organization
-        existing_membership = await self.repo.get_membership_by_user_id(user.user_id)
-        if existing_membership:
-            raise ConflictException("User already belongs to an organization.")
+        # 2. Check if user already owns an organization
+        stmt = select(Organization).where(Organization.organization_owner_user_id == user.user_id)
+        res = await self.db.execute(stmt)
+        if res.scalars().first():
+            raise ConflictException("User already owns an organization.")
 
         try:
             # Wrap all operations inside a sub-transaction (savepoint)
@@ -108,11 +63,16 @@ class OrganizationService:
                     description=payload.org_description
                 )
 
-                # Seed Default Roles
-                owner_role = await self.repo.create_role(org.organization_id, "Owner", "Organization Owner", is_system=True)
-                await self.repo.create_role(org.organization_id, "Admin", "Administrator", is_system=True)
-                await self.repo.create_role(org.organization_id, "Teacher", "Faculty Member", is_system=True)
-                await self.repo.create_role(org.organization_id, "Student", "Student Scholar", is_system=True)
+                # Retrieve the Owner system role from database
+                role_stmt = select(Role).where(
+                    Role.role_organization_id.is_(None),
+                    Role.role_is_system.is_(True),
+                    Role.role_name == SystemRole.OWNER
+                )
+                role_res = await self.db.execute(role_stmt)
+                owner_role = role_res.scalars().first()
+                if not owner_role:
+                    raise HTTPException(status_code=500, detail=f"System role '{SystemRole.OWNER}' is missing. Database is not initialized correctly.")
 
                 # Link user as Organization Owner Member
                 await self.repo.create_organization_member(

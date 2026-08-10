@@ -1,11 +1,13 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.modules.organizations.dependencies import get_active_organization_id
 from app.modules.organizations.repository import OrganizationRepository
-from app.modules.organizations.member_schemas import WorkspaceResponse, MemberResponse, WorkspaceBrief
+from app.modules.organizations.member_schemas import WorkspaceResponse
+from app.modules.rbac.dependencies import require_permission
+from app.modules.rbac.constants import WorkspacePermission
 
 router = APIRouter()
 
@@ -13,7 +15,8 @@ router = APIRouter()
 @router.get("", response_model=List[WorkspaceResponse])
 async def list_workspaces(
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.READ))
 ):
     """Retrieve all workspaces registered under the active organization."""
     repo = OrganizationRepository(db)
@@ -32,10 +35,18 @@ async def list_workspaces(
 @router.get("/{workspace_id}/members")
 async def list_workspace_members(
     workspace_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db)
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.READ))
 ):
     """List all members assigned to a specific workspace."""
     repo = OrganizationRepository(db)
+    
+    # Secure workspace lookup: Verify workspace belongs to active tenant
+    ws = await repo.get_workspace_by_id(workspace_id)
+    if not ws or ws.workspace_organization_id != org_id:
+        raise HTTPException(status_code=403, detail="Access denied to this workspace.")
+
     members_data = await repo.get_workspace_members(workspace_id)
     
     return [

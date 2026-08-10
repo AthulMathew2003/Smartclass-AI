@@ -35,7 +35,7 @@ async def get_current_user(
     if not user:
         raise UnauthorizedException("User associated with this token not found.")
 
-    if user.user_status == UserStatus.SUSPENDED:
-        raise UnauthorizedException("User account is suspended.")
+    if user.user_status != UserStatus.ACTIVE:
+        raise UnauthorizedException(f"User account is {user.user_status.value}.")
 
     return user

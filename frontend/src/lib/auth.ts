@@ -1,5 +1,8 @@
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+import { apiFetch } from "./api";
+import { clearPermissions } from "./permissions";
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -193,35 +196,27 @@ export async function fetchCurrentUser(): Promise<UserProfile | null> {
 }
 
 export async function fetchOnboardingStatus(): Promise<OnboardingStatusResponse | null> {
-  let token = getMemoryAccessToken();
-  if (!token) {
-    const session = await refreshAuthSession();
-    token = session?.accessToken || null;
-  }
-  if (!token) return null;
-
   try {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    };
-    if (typeof window !== "undefined") {
-      const activeOrgId = localStorage.getItem("activeOrganizationId");
-      if (activeOrgId) {
-        headers["X-Organization-Id"] = activeOrgId;
-      }
-    }
-
-    const res = await fetch(`${API_BASE_URL}/organizations/status`, {
-      method: "GET",
-      headers,
-      credentials: "include",
-    });
-
-    if (!res.ok) return null;
-    return await res.json();
+    return await apiFetch<OnboardingStatusResponse>("/organizations/status");
   } catch (err) {
     console.error("Failed to fetch onboarding status:", err);
+    return null;
+  }
+}
+
+export interface UserMembershipBrief {
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  role_name: string;
+  workspace_name?: string | null;
+}
+
+export async function fetchUserMemberships(): Promise<UserMembershipBrief[] | null> {
+  try {
+    return await apiFetch<UserMembershipBrief[]>("/organizations/memberships");
+  } catch (err) {
+    console.error("Failed to fetch user memberships:", err);
     return null;
   }
 }
@@ -229,32 +224,14 @@ export async function fetchOnboardingStatus(): Promise<OnboardingStatusResponse 
 export async function submitOrganizationOnboarding(
   payload: OrganizationOnboardingPayload
 ): Promise<OrganizationResponse> {
-  let token = getMemoryAccessToken();
-  if (!token) {
-    const session = await refreshAuthSession();
-    token = session?.accessToken || null;
+  try {
+    return await apiFetch<OrganizationResponse>("/organizations/onboarding", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (err: any) {
+    throw new Error(err.message || "Failed to complete organization onboarding");
   }
-
-  if (!token) {
-    throw new Error("Authentication required to complete onboarding.");
-  }
-
-  const res = await fetch(`${API_BASE_URL}/organizations/onboarding`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    credentials: "include",
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({ error: { message: "Onboarding failed" } }));
-    throw new Error(errData?.error?.message || errData?.detail || "Failed to complete organization onboarding");
-  }
-
-  return await res.json();
 }
 
 export async function logoutUser(): Promise<void> {
@@ -268,6 +245,7 @@ export async function logoutUser(): Promise<void> {
   } finally {
     setMemoryAccessToken(null);
     setCurrentUser(null);
+    clearPermissions();
   }
 }
 
@@ -280,4 +258,78 @@ export function consumeInitialAccessTokenCookie(): string | null {
     return token;
   }
   return null;
+}
+
+// ── Roles & Permissions API Interfaces & Helpers ─────────────
+
+export interface PermissionItem {
+  permission_id: string;
+  permission_name: string;
+  permission_description: string | null;
+  category: string;
+}
+
+export interface PermissionGroup {
+  category: string;
+  permissions: PermissionItem[];
+}
+
+export interface RoleDetail {
+  role_id: string;
+  role_name: string;
+  role_description: string | null;
+  role_is_system: boolean;
+  role_organization_id: string | null;
+  member_count: number;
+  permissions: PermissionItem[];
+}
+
+export interface RoleCreatePayload {
+  role_name: string;
+  role_description?: string | null;
+  permission_ids?: string[];
+}
+
+export interface RoleUpdatePayload {
+  role_name?: string;
+  role_description?: string | null;
+  permission_ids?: string[];
+}
+
+// ── Removed getOrgHeaders and getAuthenticatedToken here. ─────────────
+
+export async function fetchRoles(): Promise<RoleDetail[]> {
+  return await apiFetch<RoleDetail[]>("/roles");
+}
+
+export async function fetchRole(roleId: string): Promise<RoleDetail> {
+  return await apiFetch<RoleDetail>(`/roles/${roleId}`);
+}
+
+export async function fetchGroupedPermissions(): Promise<PermissionGroup[]> {
+  return await apiFetch<PermissionGroup[]>("/roles/permissions");
+}
+
+export async function createRole(payload: RoleCreatePayload): Promise<RoleDetail> {
+  return await apiFetch<RoleDetail>("/roles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRole(roleId: string, payload: RoleUpdatePayload): Promise<RoleDetail> {
+  return await apiFetch<RoleDetail>(`/roles/${roleId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRolePermissions(roleId: string, permissionIds: string[]): Promise<RoleDetail> {
+  return await updateRole(roleId, { permission_ids: permissionIds });
+}
+
+export async function deleteRole(roleId: string): Promise<void> {
+  await apiFetch(`/roles/${roleId}`, {
+    method: "DELETE",
+  });
 }

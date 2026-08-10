@@ -39,7 +39,7 @@ async def get_active_organization_id(
         return org_uuid
 
     # Fallback to first active membership
-    memberships = await repo.get_all_memberships_by_user_id(current_user.user_id)
+    memberships = await repo.list_memberships(current_user.user_id)
     if not memberships:
         raise ConflictException("No active organization membership found.")
         

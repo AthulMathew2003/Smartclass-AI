@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, status, Header
+from fastapi import APIRouter, Depends, Query, status, Header, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.modules.users.models import User
@@ -9,13 +9,17 @@ from app.modules.organizations.repository import OrganizationRepository
 from app.modules.organizations.service import OrganizationService
 from app.modules.organizations.member_service import MemberService
 from app.modules.organizations.dependencies import get_active_organization_id
-from app.modules.organizations.schemas import OnboardingRequest, OrganizationStatusResponse
+from app.modules.organizations.schemas import OnboardingRequest, OrganizationStatusResponse, UserMembershipBrief
+from app.modules.organizations.models import Organization, Role, Workspace, WorkspaceMember
 from app.modules.organizations.member_schemas import (
     MemberCreateRequest,
     MemberUpdateRequest,
     MemberStatusUpdateRequest,
     MemberResponse
 )
+from sqlalchemy import select
+from app.modules.rbac.dependencies import require_permission
+from app.modules.rbac.constants import MemberPermission
 
 router = APIRouter()
 
@@ -38,20 +42,45 @@ async def check_slug(slug: str = Query(...), db: AsyncSession = Depends(get_db))
 
 @router.get("/status", response_model=OrganizationStatusResponse)
 async def get_organization_status(
-    x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve the active organization membership status of the authenticated user."""
+    """Retrieve the owner onboarding status of the authenticated user."""
     service = OrganizationService(db)
-    org_uuid = None
-    if x_organization_id:
-        try:
-            org_uuid = uuid.UUID(x_organization_id)
-        except ValueError:
-            pass
-    status_data = await service.get_user_organization_status(current_user, org_uuid)
-    return status_data
+    return await service.get_user_organization_status(current_user)
+
+
+@router.get("/memberships", response_model=List[UserMembershipBrief])
+async def get_user_memberships(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Retrieve all active organization memberships for the authenticated user."""
+    repo = OrganizationRepository(db)
+    memberships = await repo.list_memberships(current_user.user_id)
+    org_briefs = []
+    for m in memberships:
+        org = await db.get(Organization, m.organization_member_organization_id)
+        role = await db.get(Role, m.organization_member_role_id)
+        if org:
+            # Query workspace
+            ws_stmt = select(Workspace).join(WorkspaceMember).where(
+                WorkspaceMember.workspace_member_user_id == current_user.user_id,
+                Workspace.workspace_organization_id == org.organization_id
+            )
+            ws_res = await db.execute(ws_stmt)
+            workspace = ws_res.scalars().first()
+
+            org_briefs.append(
+                UserMembershipBrief(
+                    organization_id=org.organization_id,
+                    organization_name=org.organization_name,
+                    organization_slug=org.organization_slug,
+                    role_name=role.role_name if role else "Member",
+                    workspace_name=workspace.workspace_name if workspace else None
+                )
+            )
+    return org_briefs
 
 
 @router.post("/onboarding")
@@ -81,7 +110,8 @@ async def get_organization_roles(
 @router.get("/members/check-email")
 async def check_member_email(
     email: str = Query(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.READ))
 ):
     """Check if a user is already registered in the system (supporting quick auto-fill)."""
     service = MemberService(db)
@@ -94,7 +124,8 @@ async def list_members(
     role_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.READ))
 ):
     """List members belonging to the active organization tenant."""
     service = MemberService(db)
@@ -105,7 +136,8 @@ async def list_members(
 async def get_member_details(
     member_id: uuid.UUID,
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.READ))
 ):
     """Fetch details of a specific member inside the active organization."""
     service = MemberService(db)
@@ -116,7 +148,8 @@ async def get_member_details(
 async def add_member(
     payload: MemberCreateRequest,
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.CREATE))
 ):
     """Create a new member (reusing profile if the user exists, creating new user profile + temp password if they don't)."""
     service = MemberService(db)
@@ -130,7 +163,8 @@ async def update_member(
     member_id: uuid.UUID,
     payload: MemberUpdateRequest,
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.UPDATE))
 ):
     """Update local member profiles and roles."""
     service = MemberService(db)
@@ -144,7 +178,8 @@ async def update_member_status(
     member_id: uuid.UUID,
     payload: MemberStatusUpdateRequest,
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.UPDATE))
 ):
     """Suspend or reactivate a member."""
     service = MemberService(db)
@@ -157,7 +192,8 @@ async def update_member_status(
 async def delete_member(
     member_id: uuid.UUID,
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.DELETE))
 ):
     """Soft-delete a member by deleting their memberships inside the organization."""
     service = MemberService(db)
@@ -168,9 +204,10 @@ async def delete_member(
 @router.patch("/members/{user_id}/workspaces")
 async def assign_user_workspaces(
     user_id: uuid.UUID,
-    workspace_ids: List[uuid.UUID],
+    workspace_ids: List[uuid.UUID] = Body(...),
     org_id: uuid.UUID = Depends(get_active_organization_id),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(MemberPermission.UPDATE))
 ):
     """Modify workspace assignments for a user."""
     service = MemberService(db)

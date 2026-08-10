@@ -30,12 +30,13 @@ class OrganizationBrief(BaseModel):
     role_name: str
 
 
+class UserMembershipBrief(BaseModel):
+    organization_id: uuid.UUID
+    organization_name: str
+    organization_slug: str
+    role_name: str
+    workspace_name: Optional[str] = None
+
+
 class OrganizationStatusResponse(BaseModel):
     has_organization: bool
-    multiple_organizations: bool = False
-    organizations: Optional[List[OrganizationBrief]] = None
-    organization_id: Optional[uuid.UUID] = None
-    organization_name: Optional[str] = None
-    workspace_id: Optional[uuid.UUID] = None
-    workspace_name: Optional[str] = None
-    role: Optional[str] = None

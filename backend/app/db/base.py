@@ -9,3 +9,4 @@ from app.modules.organizations.models import (  # noqa: F401
     OrganizationMember,
     WorkspaceMember
 )
+from app.modules.rbac.models import Permission, RolePermission  # noqa: F401

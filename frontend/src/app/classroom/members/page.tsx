@@ -1,577 +1,401 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { getMemoryAccessToken, API_BASE_URL } from "../../../lib/auth";
+import { fetchRoles } from "../../../lib/auth";
+import { fetchWorkspaces } from "../../../lib/workspaces";
+import { fetchMembers, checkMemberEmail, addMember, updateMember, updateMemberStatus, deleteMember, updateMemberWorkspaces, Member } from "../../../lib/members";
+import { hasPermission, isPermissionsLoaded } from "../../../lib/permissions";
+import ForbiddenState from "../components/ForbiddenState";
 
-interface WorkspaceBrief {
-  workspace_id: string;
-  workspace_name: string;
+// ── Types ─────────────────────────────────────────────────────
+interface RoleBrief { role_id: string; role_name: string; }
+
+// ── Shared sub-components ─────────────────────────────────────
+function FormLabel({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
+  return (
+    <label htmlFor={htmlFor} className="block text-xs font-semibold mb-1.5" style={{ color: "var(--on-surface-variant)" }}>
+      {children}
+    </label>
+  );
 }
 
-interface Member {
-  user_id: string;
-  email: string;
-  first_name: string;
-  last_name: string;
-  phone: string | null;
-  organization_member_id: string;
-  status: string;
-  role_id: string;
-  role_name: string;
-  workspaces: WorkspaceBrief[];
+function ModalInput({ className = "", ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`ds-input ${className}`}
+    />
+  );
 }
 
-interface RoleBrief {
-  role_id: string;
-  role_name: string;
+function StatusBadge({ status }: { status: string }) {
+  const active = status === "active";
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold"
+      style={active
+        ? { backgroundColor: "rgba(21,69,57,0.08)", color: "var(--primary)" }
+        : { backgroundColor: "rgba(220,38,38,0.08)", color: "#dc2626" }
+      }
+    >
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: active ? "var(--primary)" : "#dc2626" }} />
+      <span className="capitalize">{status}</span>
+    </span>
+  );
 }
 
+function Avatar({ name, email }: { name: string; email: string }) {
+  const letter = name?.[0]?.toUpperCase() || email?.[0]?.toUpperCase() || "?";
+  return (
+    <div
+      className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
+      style={{ backgroundColor: "var(--surface-container-high)", color: "var(--primary)" }}
+    >
+      {letter}
+    </div>
+  );
+}
+
+// ── Alert banner ──────────────────────────────────────────────
+function AlertBanner({ type, message, onDismiss }: { type: "error" | "success"; message: string; onDismiss: () => void }) {
+  const isError = type === "error";
+  return (
+    <div
+      className="flex items-center gap-3 p-4 rounded-xl text-sm font-medium animate-fade-in"
+      style={{
+        backgroundColor: isError ? "rgba(186,26,26,0.06)" : "rgba(21,69,57,0.06)",
+        border: `1px solid ${isError ? "rgba(186,26,26,0.2)" : "rgba(21,69,57,0.2)"}`,
+        color: isError ? "#ba1a1a" : "var(--primary)",
+      }}
+    >
+      <span className="material-symbols-outlined text-[18px] shrink-0">{isError ? "error" : "check_circle"}</span>
+      <span className="flex-1">{message}</span>
+      <button onClick={onDismiss} className="shrink-0 cursor-pointer opacity-60 hover:opacity-100 transition-opacity">
+        <span className="material-symbols-outlined text-[18px]">close</span>
+      </button>
+    </div>
+  );
+}
+
+// ── Modal wrapper ─────────────────────────────────────────────
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in" style={{ backgroundColor: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}>
+      <div className="w-full max-w-lg animate-slide-up" style={{ backgroundColor: "var(--surface)", border: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)", borderRadius: "1.25rem", boxShadow: "0 20px 60px rgba(0,0,0,0.12)" }}>
+        <div className="flex items-center justify-between px-7 pt-6 pb-5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)" }}>
+          <h2 className="text-lg font-bold" style={{ color: "var(--on-surface)" }}>{title}</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-colors" style={{ color: "var(--on-surface-variant)" }}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = "var(--surface-container)")}
+            onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
+          >
+            <span className="material-symbols-outlined text-[20px]">close</span>
+          </button>
+        </div>
+        <div className="px-7 py-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Workspace checkbox list ───────────────────────────────────
+function WorkspaceList({ workspaces, selected, onChange }: { workspaces: any[]; selected: string[]; onChange: (id: string, checked: boolean) => void }) {
+  return (
+    <div className="max-h-32 overflow-y-auto space-y-2 p-3 rounded-xl" style={{ backgroundColor: "var(--surface-container)", border: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)" }}>
+      {workspaces.length === 0 && <p className="text-xs text-center py-2" style={{ color: "var(--on-surface-variant)" }}>No workspaces available.</p>}
+      {workspaces.map((ws) => (
+        <label key={ws.workspace_id} className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="w-4 h-4 rounded cursor-pointer"
+            checked={selected.includes(ws.workspace_id)}
+            onChange={(e) => onChange(ws.workspace_id, e.target.checked)}
+          />
+          <span className="text-xs font-medium" style={{ color: "var(--on-surface)" }}>{ws.workspace_name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────
 export default function MembersManagementPage() {
+  // ── Permission Guard ──────────────────────────────────────
+  if (!isPermissionsLoaded()) {
+    return (
+      <div className="p-16 text-center space-y-3">
+        <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "var(--primary)", borderTopColor: "transparent" }} />
+        <p className="text-sm font-semibold" style={{ color: "var(--on-surface-variant)" }}>Loading…</p>
+      </div>
+    );
+  }
+  if (!hasPermission("member.read")) {
+    return <ForbiddenState message="You don't have permission to view organization members." />;
+  }
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<Member[]>([]);
   const [roles, setRoles] = useState<RoleBrief[]>([]);
   const [allWorkspaces, setAllWorkspaces] = useState<any[]>([]);
 
-  // Filter & Search State
   const [search, setSearch] = useState("");
   const [selectedRole, setSelectedRole] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
 
-  // Dialog / Modal State
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
 
-  // Add Member Form State
   const [addEmail, setAddEmail] = useState("");
   const [addFirstName, setAddFirstName] = useState("");
   const [addLastName, setAddLastName] = useState("");
   const [addPhone, setAddPhone] = useState("");
   const [addRole, setAddRole] = useState("");
   const [addWorkspaces, setAddWorkspaces] = useState<string[]>([]);
-  
-  // Email check status
   const [emailCheckResult, setEmailCheckResult] = useState<string | null>(null);
   const [emailChecking, setEmailChecking] = useState(false);
 
-  // Edit Member Form State
   const [editFirstName, setEditFirstName] = useState("");
   const [editLastName, setEditLastName] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editRole, setEditRole] = useState("");
   const [editWorkspaces, setEditWorkspaces] = useState<string[]>([]);
 
-  // General Notification
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const fetchRolesAndWorkspaces = async (token: string, orgId: string) => {
+  const fetchRolesAndWorkspaces = async () => {
     try {
-      // 1. Roles
-      const rRes = await fetch(`${API_BASE_URL}/organizations/roles`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-Organization-Id": orgId,
-        },
-      });
-      if (rRes.ok) {
-        const rData = await rRes.json();
-        setRoles(rData);
-        if (rData.length > 0) setAddRole(rData[0].role_id);
-      }
-
-      // 2. Workspaces
-      const wRes = await fetch(`${API_BASE_URL}/workspaces`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-Organization-Id": orgId,
-        },
-      });
-      if (wRes.ok) {
-        setAllWorkspaces(await wRes.json());
-      }
-    } catch (err) {}
+      const rRes = await fetchRoles();
+      setRoles(rRes); 
+      if (rRes.length > 0) setAddRole(rRes[0].role_id);
+      const wRes = await fetchWorkspaces();
+      setAllWorkspaces(wRes);
+    } catch {}
   };
 
   const loadMembersList = async () => {
     setLoading(true);
-    let token = getMemoryAccessToken();
-    const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-    
-    if (!token) {
-      const { refreshAuthSession } = await import("../../../lib/auth");
-      const session = await refreshAuthSession();
-      token = session?.accessToken || null;
-    }
-
-    if (!token || !orgId) {
-      setLoading(false);
-      return;
-    }
-
     try {
-      let url = `${API_BASE_URL}/organizations/members?`;
-      if (search) url += `search=${encodeURIComponent(search)}&`;
-      if (selectedRole) url += `role_id=${encodeURIComponent(selectedRole)}&`;
-      if (selectedStatus) url += `status=${encodeURIComponent(selectedStatus)}&`;
-
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-Organization-Id": orgId,
-        },
-      });
-
-      if (res.ok) {
-        setMembers(await res.json());
-      }
-    } catch (err) {
-      setError("Failed to reload members list.");
-    } finally {
-      setLoading(false);
-    }
+      const res = await fetchMembers({ search, role_id: selectedRole, status: selectedStatus });
+      setMembers(res);
+    } catch { setError("Failed to reload members list."); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => {
     const init = async () => {
-      let token = getMemoryAccessToken();
-      const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-      if (!token) {
-        const { refreshAuthSession } = await import("../../../lib/auth");
-        const session = await refreshAuthSession();
-        token = session?.accessToken || null;
-      }
-      if (token && orgId) {
-        fetchRolesAndWorkspaces(token, orgId);
-        loadMembersList();
-      } else {
-        setLoading(false);
-      }
+      await fetchRolesAndWorkspaces();
+      await loadMembersList();
     };
     init();
   }, [search, selectedRole, selectedStatus]);
 
-  // Handle Email field blur (loss of focus)
   const handleEmailBlur = async () => {
-    if (!addEmail || !addEmail.includes("@")) {
-      setEmailCheckResult(null);
-      return;
-    }
-
+    if (!addEmail || !addEmail.includes("@")) { setEmailCheckResult(null); return; }
     setEmailChecking(true);
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/organizations/members/check-email?email=${encodeURIComponent(addEmail)}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.exists) {
-          setEmailCheckResult("Existing SmartClass user found. Will be added directly to this organization.");
-          setAddFirstName(data.first_name || "");
-          setAddLastName(data.last_name || "");
-          setAddPhone(data.phone || "");
-        } else {
-          setEmailCheckResult("New account will be created. A temporary password will be generated automatically.");
-        }
-      }
-    } catch (err) {
-      setEmailCheckResult(null);
-    } finally {
-      setEmailChecking(false);
-    }
+      const data = await checkMemberEmail(addEmail);
+      if (data.exists) {
+        setEmailCheckResult("Existing SmartClass user — will be added directly.");
+        setAddFirstName(data.first_name || ""); setAddLastName(data.last_name || ""); setAddPhone(data.phone || "");
+      } else setEmailCheckResult("New user — a temporary password will be generated.");
+    } catch { setEmailCheckResult(null); }
+    finally { setEmailChecking(false); }
   };
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    const token = getMemoryAccessToken();
-    const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-    if (!token || !orgId) return;
-
+    setError(null); setSuccess(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/organizations/members`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "X-Organization-Id": orgId,
-        },
-        body: JSON.stringify({
-          email: addEmail,
-          first_name: addFirstName,
-          last_name: addLastName,
-          phone: addPhone || null,
-          role_id: addRole,
-          workspace_ids: addWorkspaces,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Failed to add member.");
-      }
-
+      await addMember({ email: addEmail, first_name: addFirstName, last_name: addLastName, phone: addPhone || null, role_id: addRole, workspace_ids: addWorkspaces });
       setSuccess("Member added successfully.");
       setAddDialogOpen(false);
-      
-      // Reset form
-      setAddEmail("");
-      setAddFirstName("");
-      setAddLastName("");
-      setAddPhone("");
-      setAddWorkspaces([]);
-      setEmailCheckResult(null);
-
+      setAddEmail(""); setAddFirstName(""); setAddLastName(""); setAddPhone(""); setAddWorkspaces([]); setEmailCheckResult(null);
       loadMembersList();
-    } catch (err: any) {
-      setError(err.message);
-    }
+    } catch (err: any) { setError(err.message); }
   };
 
   const handleOpenEdit = (m: Member) => {
-    setSelectedMember(m);
-    setEditFirstName(m.first_name || "");
-    setEditLastName(m.last_name || "");
-    setEditPhone(m.phone || "");
-    setEditRole(m.role_id);
-    setEditWorkspaces(m.workspaces.map((w) => w.workspace_id));
+    setSelectedMember(m); setEditFirstName(m.first_name || ""); setEditLastName(m.last_name || "");
+    setEditPhone(m.phone || ""); setEditRole(m.role_id); setEditWorkspaces(m.workspaces.map(w => w.workspace_id));
     setEditDialogOpen(true);
   };
 
   const handleEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMember) return;
-    setError(null);
-    setSuccess(null);
-
-    const token = getMemoryAccessToken();
-    const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-    if (!token || !orgId) return;
-
+    setError(null); setSuccess(null);
     try {
-      // 1. Update Profile & Role
-      const res = await fetch(`${API_BASE_URL}/organizations/members/${selectedMember.organization_member_id}`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "X-Organization-Id": orgId,
-        },
-        body: JSON.stringify({
-          first_name: editFirstName,
-          last_name: editLastName,
-          phone: editPhone || null,
-          role_id: editRole,
-        }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Failed to update member details.");
-      }
-
-      // 2. Synchronize Workspaces
-      const wsRes = await fetch(
-        `${API_BASE_URL}/organizations/members/${selectedMember.user_id}/workspaces`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "X-Organization-Id": orgId,
-          },
-          body: JSON.stringify(editWorkspaces),
-        }
-      );
-
-      if (!wsRes.ok) {
-        throw new Error("Failed to synchronize workspace assignments.");
-      }
-
-      setSuccess("Member details updated successfully.");
-      setEditDialogOpen(false);
-      loadMembersList();
-    } catch (err: any) {
-      setError(err.message);
-    }
+      await updateMember(selectedMember.organization_member_id, { first_name: editFirstName, last_name: editLastName, phone: editPhone || null, role_id: editRole });
+      await updateMemberWorkspaces(selectedMember.user_id, editWorkspaces);
+      setSuccess("Member updated successfully."); setEditDialogOpen(false); loadMembersList();
+    } catch (err: any) { setError(err.message); }
   };
 
   const toggleStatus = async (m: Member) => {
-    setError(null);
-    setSuccess(null);
-
-    const token = getMemoryAccessToken();
-    const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-    if (!token || !orgId) return;
-
+    setError(null); setSuccess(null);
     const newStatus = m.status === "active" ? "suspended" : "active";
-
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/organizations/members/${m.organization_member_id}/status`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "X-Organization-Id": orgId,
-          },
-          body: JSON.stringify({ status: newStatus }),
-        }
-      );
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Failed to modify member status.");
-      }
-
-      setSuccess(`Member status updated to ${newStatus}.`);
+      await updateMemberStatus(m.organization_member_id, newStatus);
+      setSuccess(`Member ${newStatus === "active" ? "activated" : "suspended"}.`);
       loadMembersList();
-    } catch (err: any) {
-      setError(err.message);
-    }
+    } catch (err: any) { setError(err.message); }
   };
 
   const handleDeleteMember = async (m: Member) => {
-    if (!confirm(`Are you sure you want to remove ${m.first_name} ${m.last_name} from this organization?`)) {
-      return;
-    }
-    setError(null);
-    setSuccess(null);
-
-    const token = getMemoryAccessToken();
-    const orgId = typeof window !== "undefined" ? localStorage.getItem("activeOrganizationId") : null;
-    if (!token || !orgId) return;
-
+    if (!confirm(`Remove ${m.first_name} ${m.last_name} from this organization?`)) return;
+    setError(null); setSuccess(null);
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/organizations/members/${m.organization_member_id}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "X-Organization-Id": orgId,
-          },
-        }
-      );
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Failed to remove member.");
-      }
-
-      setSuccess("Member removed from organization.");
-      loadMembersList();
-    } catch (err: any) {
-      setError(err.message);
-    }
+      await deleteMember(m.organization_member_id);
+      setSuccess("Member removed from organization."); loadMembersList();
+    } catch (err: any) { setError(err.message); }
   };
 
-  const handleWorkspaceCheck = (id: string, isChecked: boolean, mode: "add" | "edit") => {
-    if (mode === "add") {
-      if (isChecked) {
-        setAddWorkspaces([...addWorkspaces, id]);
-      } else {
-        setAddWorkspaces(addWorkspaces.filter((w) => w !== id));
-      }
-    } else {
-      if (isChecked) {
-        setEditWorkspaces([...editWorkspaces, id]);
-      } else {
-        setEditWorkspaces(editWorkspaces.filter((w) => w !== id));
-      }
-    }
+  const toggleWorkspace = (id: string, checked: boolean, mode: "add" | "edit") => {
+    if (mode === "add") setAddWorkspaces(checked ? [...addWorkspaces, id] : addWorkspaces.filter(w => w !== id));
+    else setEditWorkspaces(checked ? [...editWorkspaces, id] : editWorkspaces.filter(w => w !== id));
   };
 
   return (
-    <main className="p-8 space-y-8 bg-[var(--background)] text-[var(--on-surface)] min-h-screen">
-      {/* Header Row */}
-      <header className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+    <div className="space-y-6">
+      {/* ── Page Header ─────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-[var(--primary)]">Organization Members</h1>
-          <p className="text-sm text-[var(--on-surface-variant)]">Manage profiles, role levels, and workspace privileges.</p>
+          <h1 className="text-2xl font-bold tracking-tight" style={{ color: "var(--on-surface)" }}>Organization Members</h1>
+          <p className="text-sm mt-1" style={{ color: "var(--on-surface-variant)" }}>Manage profiles, roles, and workspace assignments.</p>
         </div>
-        <button
-          onClick={() => setAddDialogOpen(true)}
-          className="bg-[var(--primary)] text-[var(--on-primary)] px-6 py-3.5 rounded-full font-bold hover:bg-[var(--primary-container)] transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shrink-0 active:scale-95"
-        >
-          <span className="material-symbols-outlined text-[20px]">person_add</span>
-          <span>Add Member</span>
-        </button>
-      </header>
+        {hasPermission("member.create") && (
+          <button
+            onClick={() => setAddDialogOpen(true)}
+            className="ds-btn-primary shrink-0 px-5 py-2.5"
+          >
+            <span className="material-symbols-outlined text-[18px]">person_add</span>
+            Add Member
+          </button>
+        )}
+      </div>
 
-      {/* Notifications */}
-      {error && (
-        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-500 text-sm font-semibold flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px]">error</span>
-          <span>{error}</span>
-        </div>
-      )}
-      {success && (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 text-sm font-semibold flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px]">check_circle</span>
-          <span>{success}</span>
-        </div>
-      )}
+      {/* ── Notifications ───────────────────────────────── */}
+      {error && <AlertBanner type="error" message={error} onDismiss={() => setError(null)} />}
+      {success && <AlertBanner type="success" message={success} onDismiss={() => setSuccess(null)} />}
 
-      {/* Filters Card */}
-      <section className="bg-white dark:bg-[#1b211e] p-6 rounded-[24px] border border-[var(--outline-variant)]/20 shadow-sm flex flex-col md:flex-row gap-4 items-center">
-        {/* Search */}
-        <div className="relative flex-grow w-full">
+      {/* ── Filter Bar ──────────────────────────────────── */}
+      <div className="ds-card p-4 flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+        <div className="relative flex-1">
+          <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[18px]" style={{ color: "var(--on-surface-variant)" }}>search</span>
           <input
             type="text"
-            className="w-full pl-12 pr-6 py-3.5 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-            placeholder="Search by name or email..."
+            className="ds-input pl-10"
+            placeholder="Search by name or email…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-[var(--on-surface-variant)] text-[20px]">
-            search
-          </span>
         </div>
+        <select
+          value={selectedRole}
+          onChange={(e) => setSelectedRole(e.target.value)}
+          className="ds-input cursor-pointer md:w-44"
+          style={{ appearance: "none" }}
+        >
+          <option value="">All Roles</option>
+          {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.role_name}</option>)}
+        </select>
+        <select
+          value={selectedStatus}
+          onChange={(e) => setSelectedStatus(e.target.value)}
+          className="ds-input cursor-pointer md:w-44"
+          style={{ appearance: "none" }}
+        >
+          <option value="">All Statuses</option>
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+        </select>
+      </div>
 
-        {/* Role Filter */}
-        <div className="w-full md:w-[200px]">
-          <select
-            value={selectedRole}
-            onChange={(e) => setSelectedRole(e.target.value)}
-            className="w-full px-5 py-3.5 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)]"
-          >
-            <option value="">All Roles</option>
-            {roles.map((r) => (
-              <option key={r.role_id} value={r.role_id}>
-                {r.role_name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Status Filter */}
-        <div className="w-full md:w-[200px]">
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="w-full px-5 py-3.5 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)]"
-          >
-            <option value="">All Statuses</option>
-            <option value="active">Active</option>
-            <option value="suspended">Suspended</option>
-          </select>
-        </div>
-      </section>
-
-      {/* Members List Table */}
-      <section className="bg-white dark:bg-[#1b211e] rounded-[32px] border border-[var(--outline-variant)]/20 shadow-md overflow-hidden">
+      {/* ── Members Table ────────────────────────────────── */}
+      <div style={{ backgroundColor: "var(--surface)", border: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)", borderRadius: "1rem", overflow: "hidden" }}>
         {loading ? (
           <div className="p-16 text-center space-y-3">
-            <div className="w-10 h-10 border-4 border-[var(--primary)] border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="text-sm font-semibold">Updating members index...</p>
+            <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin mx-auto" style={{ borderColor: "var(--primary)", borderTopColor: "transparent" }} />
+            <p className="text-sm font-semibold" style={{ color: "var(--on-surface-variant)" }}>Loading members…</p>
           </div>
         ) : members.length === 0 ? (
-          <div className="p-16 text-center text-[var(--on-surface-variant)]">
-            <span className="material-symbols-outlined text-[48px] mb-3 text-outline/30">people</span>
-            <p className="font-semibold">No members match the search query.</p>
+          <div className="p-16 text-center space-y-3">
+            <span className="material-symbols-outlined text-[40px]" style={{ color: "var(--outline-variant)" }}>group</span>
+            <p className="text-sm font-semibold" style={{ color: "var(--on-surface-variant)" }}>No members match your search.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="border-b border-[var(--outline-variant)]/30 bg-[var(--surface-container)]/30">
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)]">Name</th>
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)]">Email</th>
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)]">Role</th>
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)]">Workspaces</th>
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)]">Status</th>
-                  <th className="p-5 font-semibold text-[var(--on-surface-variant)] text-right">Actions</th>
+                <tr style={{ backgroundColor: "var(--surface-container)" }}>
+                  {["Member", "Email", "Role", "Workspaces", "Status", ""].map(h => (
+                    <th key={h} className="px-5 py-3.5 text-xs font-bold uppercase tracking-wider" style={{ color: "var(--on-surface-variant)" }}>{h}</th>
+                  ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[var(--outline-variant)]/20">
+              <tbody>
                 {members.map((m) => (
-                  <tr key={m.organization_member_id} className="hover:bg-[var(--surface-container)]/10 transition-colors">
-                    {/* Name / Avatar */}
-                    <td className="p-5 flex items-center gap-3">
-                      <div className="w-10 h-10 bg-[var(--primary)]/10 text-[var(--primary)] font-bold rounded-full flex items-center justify-center">
-                        {m.first_name ? m.first_name[0] : m.email[0].toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="font-bold text-[var(--on-surface)]">
-                          {m.first_name} {m.last_name}
+                  <tr
+                    key={m.organization_member_id}
+                    style={{ borderTop: "1px solid color-mix(in srgb, var(--outline-variant) 25%, transparent)" }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = "var(--surface-container-low)")}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
+                  >
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <Avatar name={`${m.first_name}${m.last_name}`} email={m.email} />
+                        <div>
+                          <div className="font-semibold" style={{ color: "var(--on-surface)" }}>{m.first_name} {m.last_name}</div>
+                          <div className="text-xs mt-0.5" style={{ color: "var(--on-surface-variant)" }}>{m.phone || "—"}</div>
                         </div>
-                        <div className="text-xs text-[var(--on-surface-variant)]">{m.phone || "No Phone"}</div>
                       </div>
                     </td>
-
-                    {/* Email */}
-                    <td className="p-5 text-[var(--on-surface)]">{m.email}</td>
-
-                    {/* Role */}
-                    <td className="p-5">
-                      <span className="inline-block px-3 py-1 rounded-full bg-[var(--surface-container)] text-[var(--on-surface)] font-semibold text-xs border border-[var(--outline-variant)]/20">
-                        {m.role_name}
-                      </span>
+                    <td className="px-5 py-4" style={{ color: "var(--on-surface)" }}>{m.email}</td>
+                    <td className="px-5 py-4">
+                      <span className="ds-badge ds-badge-neutral">{m.role_name}</span>
                     </td>
-
-                    {/* Workspaces */}
-                    <td className="p-5 max-w-[220px]">
+                    <td className="px-5 py-4 max-w-[200px]">
                       <div className="flex flex-wrap gap-1">
-                        {m.workspaces.map((w) => (
-                          <span
-                            key={w.workspace_id}
-                            className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[var(--primary)]/10 text-[var(--primary)]"
-                          >
+                        {m.workspaces.map(w => (
+                          <span key={w.workspace_id} className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold" style={{ backgroundColor: "rgba(21,69,57,0.07)", color: "var(--primary)" }}>
                             {w.workspace_name}
                           </span>
                         ))}
-                        {m.workspaces.length === 0 && (
-                          <span className="text-xs text-[var(--on-surface-variant)] italic">None</span>
-                        )}
+                        {m.workspaces.length === 0 && <span className="text-xs italic" style={{ color: "var(--on-surface-variant)" }}>None</span>}
                       </div>
                     </td>
-
-                    {/* Status */}
-                    <td className="p-5">
-                      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
-                        m.status === "active"
-                          ? "bg-emerald-500/10 text-emerald-500"
-                          : "bg-red-500/10 text-red-500"
-                      }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          m.status === "active" ? "bg-emerald-500" : "bg-red-500"
-                        }`}></span>
-                        <span className="capitalize">{m.status}</span>
-                      </span>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="p-5 text-right space-x-2 shrink-0">
-                      <button
-                        onClick={() => handleOpenEdit(m)}
-                        className="px-3.5 py-1.5 rounded-full border border-[var(--outline-variant)]/40 hover:bg-[var(--surface-container-high)] text-xs font-semibold text-[var(--on-surface)] transition-all cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                      {m.role_name.toLowerCase() !== "owner" && (
-                        <>
-                          <button
-                            onClick={() => toggleStatus(m)}
-                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                              m.status === "active"
-                                ? "border-red-500/30 text-red-500 hover:bg-red-500/10"
-                                : "border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10"
-                            }`}
-                          >
-                            {m.status === "active" ? "Suspend" : "Activate"}
+                    <td className="px-5 py-4"><StatusBadge status={m.status} /></td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center justify-end gap-2">
+                        {hasPermission("member.update") && (
+                          <button onClick={() => handleOpenEdit(m)} className="ds-btn-secondary px-3 py-1.5 text-xs">
+                            Edit
                           </button>
-                          <button
-                            onClick={() => handleDeleteMember(m)}
-                            className="px-3.5 py-1.5 rounded-full border border-red-500/20 text-red-500 hover:bg-red-500/10 text-xs font-semibold transition-all cursor-pointer"
-                          >
-                            Remove
-                          </button>
-                        </>
-                      )}
+                        )}
+                        {m.role_name.toLowerCase() !== "owner" && (
+                          <>
+                            {hasPermission("member.update") && (
+                              <button
+                                onClick={() => toggleStatus(m)}
+                                className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer"
+                                style={m.status === "active"
+                                  ? { borderColor: "rgba(220,38,38,0.25)", color: "#dc2626" }
+                                  : { borderColor: "rgba(21,69,57,0.25)", color: "var(--primary)" }
+                                }
+                                onMouseEnter={e => (e.currentTarget.style.backgroundColor = m.status === "active" ? "rgba(220,38,38,0.05)" : "rgba(21,69,57,0.05)")}
+                                onMouseLeave={e => (e.currentTarget.style.backgroundColor = "transparent")}
+                              >
+                                {m.status === "active" ? "Suspend" : "Activate"}
+                              </button>
+                            )}
+                            {hasPermission("member.delete") && (
+                              <button onClick={() => handleDeleteMember(m)} className="ds-btn-destructive px-3 py-1.5">
+                                Remove
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -579,222 +403,92 @@ export default function MembersManagementPage() {
             </table>
           </div>
         )}
-      </section>
+      </div>
 
-      {/* Add Member Dialog Modal */}
+      {/* ── Add Member Modal ─────────────────────────────── */}
       {addDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-[#1b211e] rounded-[32px] p-8 border border-[var(--outline-variant)]/20 shadow-2xl relative">
-            <header className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-[var(--primary)]">Add New Member</h2>
-              <button
-                onClick={() => setAddDialogOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--surface-container)] text-[var(--on-surface-variant)] cursor-pointer"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </header>
-
-            <form onSubmit={handleAddMember} className="space-y-4">
-              {/* Email */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Email Address</label>
-                <input
-                  type="email"
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                  placeholder="name@school.com"
-                  value={addEmail}
-                  onChange={(e) => setAddEmail(e.target.value)}
-                  onBlur={handleEmailBlur}
-                  required
-                />
-                {emailChecking && <p className="text-[10px] text-[var(--on-surface-variant)] italic">Checking address...</p>}
-                {emailCheckResult && <p className="text-[10px] font-semibold text-[var(--primary)]">{emailCheckResult}</p>}
+        <Modal title="Add New Member" onClose={() => setAddDialogOpen(false)}>
+          <form onSubmit={handleAddMember} className="space-y-4">
+            <div>
+              <FormLabel htmlFor="add-email">Email Address</FormLabel>
+              <ModalInput id="add-email" type="email" placeholder="name@school.com" value={addEmail} onChange={(e) => setAddEmail(e.target.value)} onBlur={handleEmailBlur} required />
+              {emailChecking && <p className="text-xs mt-1.5 italic" style={{ color: "var(--on-surface-variant)" }}>Checking address…</p>}
+              {emailCheckResult && (
+                <p className="text-xs mt-1.5 font-medium flex items-center gap-1.5" style={{ color: "var(--primary)" }}>
+                  <span className="material-symbols-outlined text-[14px]">info</span>
+                  {emailCheckResult}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FormLabel htmlFor="add-first">First Name</FormLabel>
+                <ModalInput id="add-first" type="text" value={addFirstName} onChange={(e) => setAddFirstName(e.target.value)} required />
               </div>
-
-              {/* First & Last Name */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-[var(--on-surface-variant)]">First Name</label>
-                  <input
-                    type="text"
-                    className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                    value={addFirstName}
-                    onChange={(e) => setAddFirstName(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Last Name</label>
-                  <input
-                    type="text"
-                    className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                    value={addLastName}
-                    onChange={(e) => setAddLastName(e.target.value)}
-                    required
-                  />
-                </div>
+              <div>
+                <FormLabel htmlFor="add-last">Last Name</FormLabel>
+                <ModalInput id="add-last" type="text" value={addLastName} onChange={(e) => setAddLastName(e.target.value)} required />
               </div>
-
-              {/* Phone */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Phone (Optional)</label>
-                <input
-                  type="text"
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                  value={addPhone}
-                  onChange={(e) => setAddPhone(e.target.value)}
-                />
-              </div>
-
-              {/* Role */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Organization Role</label>
-                <select
-                  value={addRole}
-                  onChange={(e) => setAddRole(e.target.value)}
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)]"
-                  required
-                >
-                  {roles.map((r) => (
-                    <option key={r.role_id} value={r.role_id}>
-                      {r.role_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Workspace Assignments */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Workspace Assignments</label>
-                <div className="max-h-[120px] overflow-y-auto space-y-2 p-2 bg-[var(--surface-container)] rounded-2xl">
-                  {allWorkspaces.map((ws) => (
-                    <div key={ws.workspace_id} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id={`ws-add-${ws.workspace_id}`}
-                        className="w-4 h-4 text-[var(--primary)] rounded border-[var(--outline-variant)] focus:ring-[var(--primary)]"
-                        checked={addWorkspaces.includes(ws.workspace_id)}
-                        onChange={(e) => handleWorkspaceCheck(ws.workspace_id, e.target.checked, "add")}
-                      />
-                      <label htmlFor={`ws-add-${ws.workspace_id}`} className="text-xs text-[var(--on-surface)] cursor-pointer select-none">
-                        {ws.workspace_name}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-4 rounded-full bg-[var(--primary)] text-[var(--on-primary)] font-bold hover:bg-[var(--primary-container)] cursor-pointer transition-colors active:scale-98"
-              >
-                Save Member Details
-              </button>
-            </form>
-          </div>
-        </div>
+            </div>
+            <div>
+              <FormLabel htmlFor="add-phone">Phone <span style={{ fontWeight: 400, color: "var(--on-surface-variant)" }}>(optional)</span></FormLabel>
+              <ModalInput id="add-phone" type="text" value={addPhone} onChange={(e) => setAddPhone(e.target.value)} />
+            </div>
+            <div>
+              <FormLabel htmlFor="add-role">Organization Role</FormLabel>
+              <select id="add-role" className="ds-input cursor-pointer" style={{ appearance: "none" }} value={addRole} onChange={(e) => setAddRole(e.target.value)} required>
+                {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.role_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <FormLabel>Workspace Assignments</FormLabel>
+              <WorkspaceList workspaces={allWorkspaces} selected={addWorkspaces} onChange={(id, c) => toggleWorkspace(id, c, "add")} />
+            </div>
+            <button type="submit" className="ds-btn-primary w-full py-3 mt-1">Save Member</button>
+          </form>
+        </Modal>
       )}
 
-      {/* Edit Member Dialog Modal */}
+      {/* ── Edit Member Modal ─────────────────────────────── */}
       {editDialogOpen && selectedMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-[#1b211e] rounded-[32px] p-8 border border-[var(--outline-variant)]/20 shadow-2xl relative">
-            <header className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-[var(--primary)]">Edit Member Settings</h2>
-              <button
-                onClick={() => setEditDialogOpen(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--surface-container)] text-[var(--on-surface-variant)] cursor-pointer"
+        <Modal title="Edit Member" onClose={() => setEditDialogOpen(false)}>
+          <form onSubmit={handleEditMember} className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FormLabel htmlFor="edit-first">First Name</FormLabel>
+                <ModalInput id="edit-first" type="text" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} required />
+              </div>
+              <div>
+                <FormLabel htmlFor="edit-last">Last Name</FormLabel>
+                <ModalInput id="edit-last" type="text" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} required />
+              </div>
+            </div>
+            <div>
+              <FormLabel htmlFor="edit-phone">Phone</FormLabel>
+              <ModalInput id="edit-phone" type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} />
+            </div>
+            <div>
+              <FormLabel htmlFor="edit-role">Organization Role</FormLabel>
+              <select
+                id="edit-role"
+                className="ds-input cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ appearance: "none" }}
+                value={editRole}
+                onChange={(e) => setEditRole(e.target.value)}
+                disabled={selectedMember.role_name.toLowerCase() === "owner"}
+                required
               >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </header>
-
-            <form onSubmit={handleEditMember} className="space-y-4">
-              {/* First & Last Name */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-[var(--on-surface-variant)]">First Name</label>
-                  <input
-                    type="text"
-                    className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                    value={editFirstName}
-                    onChange={(e) => setEditFirstName(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Last Name</label>
-                  <input
-                    type="text"
-                    className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                    value={editLastName}
-                    onChange={(e) => setEditLastName(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Phone */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Phone</label>
-                <input
-                  type="text"
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] text-[var(--on-surface)]"
-                  value={editPhone}
-                  onChange={(e) => setEditPhone(e.target.value)}
-                />
-              </div>
-
-              {/* Role */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Organization Role</label>
-                <select
-                  value={editRole}
-                  onChange={(e) => setEditRole(e.target.value)}
-                  className="w-full px-5 py-3 bg-[var(--surface-container)] rounded-full text-sm outline-none border border-transparent focus:border-[var(--primary)] cursor-pointer text-[var(--on-surface)] disabled:opacity-60 disabled:cursor-not-allowed"
-                  disabled={selectedMember?.role_name.toLowerCase() === "owner"}
-                  required
-                >
-                  {roles.map((r) => (
-                    <option key={r.role_id} value={r.role_id}>
-                      {r.role_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Workspace Assignments */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-[var(--on-surface-variant)]">Workspace Assignments</label>
-                <div className="max-h-[120px] overflow-y-auto space-y-2 p-2 bg-[var(--surface-container)] rounded-2xl">
-                  {allWorkspaces.map((ws) => (
-                    <div key={ws.workspace_id} className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id={`ws-edit-${ws.workspace_id}`}
-                        className="w-4 h-4 text-[var(--primary)] rounded border-[var(--outline-variant)] focus:ring-[var(--primary)]"
-                        checked={editWorkspaces.includes(ws.workspace_id)}
-                        onChange={(e) => handleWorkspaceCheck(ws.workspace_id, e.target.checked, "edit")}
-                      />
-                      <label htmlFor={`ws-edit-${ws.workspace_id}`} className="text-xs text-[var(--on-surface)] cursor-pointer select-none">
-                        {ws.workspace_name}
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-4 rounded-full bg-[var(--primary)] text-[var(--on-primary)] font-bold hover:bg-[var(--primary-container)] cursor-pointer transition-colors active:scale-98"
-              >
-                Apply Changes
-              </button>
-            </form>
-          </div>
-        </div>
+                {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.role_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <FormLabel>Workspace Assignments</FormLabel>
+              <WorkspaceList workspaces={allWorkspaces} selected={editWorkspaces} onChange={(id, c) => toggleWorkspace(id, c, "edit")} />
+            </div>
+            <button type="submit" className="ds-btn-primary w-full py-3 mt-1">Apply Changes</button>
+          </form>
+        </Modal>
       )}
-    </main>
+    </div>
   );
 }

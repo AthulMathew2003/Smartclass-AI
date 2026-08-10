@@ -42,8 +42,8 @@ async def test_member_management_flows(client: AsyncClient, db_session):
     await db_session.commit()
 
     # Fetch organization details
-    org_status_res = await client.get("/api/v1/organizations/status", headers=headers)
-    org_id = org_status_res.json()["organization_id"]
+    org_memberships_res = await client.get("/api/v1/organizations/memberships", headers=headers)
+    org_id = org_memberships_res.json()[0]["organization_id"]
     headers["X-Organization-Id"] = org_id
 
     # Fetch roles
@@ -124,6 +124,14 @@ async def test_member_management_flows(client: AsyncClient, db_session):
     )
     assert status_res.status_code == 200
     assert status_res.json()["status"] == "suspended"
+
+    # Test workspace assignments sync endpoint
+    assign_ws_res = await client.patch(
+        f"/api/v1/organizations/members/{res_user.user_id}/workspaces",
+        json=[workspace_id],
+        headers=headers
+    )
+    assert assign_ws_res.status_code == 200
 
     # Verify user status remains active globally
     from app.modules.users.models import UserStatus

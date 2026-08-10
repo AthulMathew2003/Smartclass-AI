@@ -5,6 +5,7 @@ from sqlalchemy import String, Text, DateTime, Enum as SQLEnum, ForeignKey, Bool
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base
+from app.modules.rbac.models import Permission, RolePermission
 
 
 class OrganizationStatus(str, Enum):
@@ -117,6 +118,7 @@ class Role(Base):
     organization = relationship("Organization", back_populates="roles")
     organization_members = relationship("OrganizationMember", back_populates="role")
     workspace_members = relationship("WorkspaceMember", back_populates="role")
+    permissions = relationship("Permission", secondary="tbl_role_permissions", back_populates="roles")
 
 
 class Workspace(Base):

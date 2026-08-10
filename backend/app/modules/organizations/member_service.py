@@ -289,9 +289,10 @@ class MemberService:
     async def assign_workspaces(self, org_id: uuid.UUID, user_id: uuid.UUID, workspace_ids: List[uuid.UUID]):
         """Synchronize a user's assigned workspaces."""
         # Check active membership
-        member = await self.repo.get_organization_member_by_user_id(org_id, user_id)
-        if not member:
+        data = await self.repo.get_organization_member_by_user_id(org_id, user_id)
+        if not data:
             raise NotFoundException("User is not a member of this organization.")
+        user, member_obj, role = data
 
         try:
             async with self.db.begin_nested():
@@ -302,7 +303,7 @@ class MemberService:
                     await self.repo.create_workspace_member(
                         workspace_id=ws_id,
                         user_id=user_id,
-                        role_id=member.organization_member_role_id
+                        role_id=member_obj.organization_member_role_id
                     )
         except Exception as e:
             raise e
