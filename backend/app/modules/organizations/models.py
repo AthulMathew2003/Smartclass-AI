@@ -123,6 +123,13 @@ class Role(Base):
 
 class Workspace(Base):
     __tablename__ = "tbl_workspaces"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_organization_id",
+            "workspace_name",
+            name="uq_workspace_org_name"
+        ),
+    )
 
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

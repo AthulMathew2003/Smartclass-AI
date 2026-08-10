@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.users.models import User, UserStatus
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
-from app.modules.organizations.models import Organization, OrganizationMember, Role, OrganizationMemberStatus
+from app.modules.organizations.models import Organization, OrganizationMember, Role, OrganizationMemberStatus, WorkspaceStatus
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.organizations.member_schemas import (
     MemberCreateRequest,
@@ -22,6 +22,21 @@ class MemberService:
         self.repo = OrganizationRepository(db)
         self.user_repo = UserRepository(db)
         self.user_service = UserService(db)
+
+    async def _validate_workspace_assignments(self, org_id: uuid.UUID, workspace_ids: List[uuid.UUID]):
+        unique_ws_ids = set(workspace_ids)
+        if not unique_ws_ids:
+            return
+
+        workspaces = await self.repo.get_workspaces_by_ids(unique_ws_ids)
+        if len(workspaces) != len(unique_ws_ids):
+            raise NotFoundException("One or more workspaces do not exist.")
+        
+        for ws in workspaces:
+            if ws.workspace_organization_id != org_id:
+                raise ForbiddenException(f"Workspace '{ws.workspace_name}' belongs to another organization.")
+            if ws.workspace_status != WorkspaceStatus.ACTIVE:
+                raise ConflictException(f"Workspace '{ws.workspace_name}' is archived and cannot be assigned.")
 
     async def check_email(self, email: str) -> dict:
         """Check if a user exists globally in SmartClass AI by their email address."""
@@ -40,10 +55,11 @@ class MemberService:
         org_id: uuid.UUID,
         search: Optional[str] = None,
         role_id: Optional[uuid.UUID] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        workspace_id: Optional[uuid.UUID] = None
     ) -> List[MemberResponse]:
         """List all members of an organization, including their assigned workspaces and role names."""
-        db_members = await self.repo.get_organization_members(org_id, search, role_id, status)
+        db_members = await self.repo.get_organization_members(org_id, search, role_id, status, workspace_id)
         
         responses = []
         for user, member, role in db_members:
@@ -133,15 +149,19 @@ class MemberService:
 
         try:
             async with self.db.begin_nested():
-                # 2. Add Organization Membership
+                # 2. Validate workspaces
+                await self._validate_workspace_assignments(org_id, payload.workspace_ids)
+
+                # 3. Add Organization Membership
                 member = await self.repo.create_organization_member(
                     org_id=org_id,
                     user_id=user.user_id,
                     role_id=payload.role_id
                 )
 
-                # 3. Add Workspace Assignments
-                for ws_id in payload.workspace_ids:
+                # 4. Add Workspace Assignments
+                unique_ws_ids = set(payload.workspace_ids)
+                for ws_id in unique_ws_ids:
                     await self.repo.create_workspace_member(
                         workspace_id=ws_id,
                         user_id=user.user_id,
@@ -296,10 +316,14 @@ class MemberService:
 
         try:
             async with self.db.begin_nested():
+                # Validate new workspace assignments
+                await self._validate_workspace_assignments(org_id, workspace_ids)
+
                 # Clear existing
                 await self.repo.delete_user_workspace_memberships(org_id, user_id)
                 # Assign new
-                for ws_id in workspace_ids:
+                unique_ws_ids = set(workspace_ids)
+                for ws_id in unique_ws_ids:
                     await self.repo.create_workspace_member(
                         workspace_id=ws_id,
                         user_id=user_id,

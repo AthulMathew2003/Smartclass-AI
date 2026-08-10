@@ -39,11 +39,13 @@ export async function fetchMembers(params: {
   search?: string;
   role_id?: string;
   status?: string;
+  workspace_id?: string;
 }): Promise<Member[]> {
   const queryParts: string[] = [];
   if (params.search) queryParts.push(`search=${encodeURIComponent(params.search)}`);
   if (params.role_id) queryParts.push(`role_id=${encodeURIComponent(params.role_id)}`);
   if (params.status) queryParts.push(`status=${encodeURIComponent(params.status)}`);
+  if (params.workspace_id) queryParts.push(`workspace_id=${encodeURIComponent(params.workspace_id)}`);
   
   const queryString = queryParts.length > 0 ? `?${queryParts.join("&")}` : "";
   return await apiFetch<Member[]>(`/organizations/members${queryString}`);

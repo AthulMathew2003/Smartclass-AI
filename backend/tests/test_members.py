@@ -156,3 +156,82 @@ async def test_member_management_flows(client: AsyncClient, db_session):
     # Verify teacher user still exists in DB (profile is not deleted)
     teacher_db = await db_session.get(User, res_user.user_id)
     assert teacher_db is not None
+
+
+@pytest.mark.asyncio
+async def test_cross_org_workspace_assignment_and_archived(client: AsyncClient, db_session):
+    # Setup two distinct organizations
+    user_service = UserService(db_session)
+    owner1 = await user_service.create_user(email="owner1@smartclass.com", password="Password123!")
+    owner2 = await user_service.create_user(email="owner2@smartclass.com", password="Password123!")
+    await db_session.commit()
+
+    # Login Owner 1
+    login1_res = await client.post("/api/v1/auth/login", json={"email": "owner1@smartclass.com", "password": "Password123!"})
+    token1 = login1_res.json()["access_token"]
+    headers1 = {"Authorization": f"Bearer {token1}"}
+
+    # Login Owner 2
+    login2_res = await client.post("/api/v1/auth/login", json={"email": "owner2@smartclass.com", "password": "Password123!"})
+    token2 = login2_res.json()["access_token"]
+    headers2 = {"Authorization": f"Bearer {token2}"}
+
+    # Onboard Org 1
+    await client.post("/api/v1/organizations/onboarding", json={
+        "org_name": "Org 1", "org_slug": "org-1", "org_type": "School", "org_country": "US", "org_state": "NY", "org_city": "NYC",
+        "org_timezone": "UTC", "owner_first_name": "O1", "owner_last_name": "O1", "owner_phone": "1", "workspace_name": "WS1"
+    }, headers=headers1)
+    
+    # Onboard Org 2
+    await client.post("/api/v1/organizations/onboarding", json={
+        "org_name": "Org 2", "org_slug": "org-2", "org_type": "School", "org_country": "US", "org_state": "NY", "org_city": "NYC",
+        "org_timezone": "UTC", "owner_first_name": "O2", "owner_last_name": "O2", "owner_phone": "2", "workspace_name": "WS2"
+    }, headers=headers2)
+    await db_session.commit()
+
+    # Get Org 1 Details
+    org1_res = await client.get("/api/v1/organizations/memberships", headers=headers1)
+    org1_id = org1_res.json()[0]["organization_id"]
+    headers1["X-Organization-Id"] = org1_id
+
+    # Get Org 2 Details
+    org2_res = await client.get("/api/v1/organizations/memberships", headers=headers2)
+    org2_id = org2_res.json()[0]["organization_id"]
+    headers2["X-Organization-Id"] = org2_id
+
+    # Get Workspace 2 (from Org 2)
+    ws2_res = await client.get("/api/v1/workspaces", headers=headers2)
+    ws2_id = ws2_res.json()[0]["workspace_id"]
+
+    # Get Roles for Org 1
+    roles1_res = await client.get("/api/v1/organizations/roles", headers=headers1)
+    teacher_role1_id = next(r["role_id"] for r in roles1_res.json() if r["role_name"] == "Teacher")
+
+    # 1. Test Cross-Tenant Assignment
+    # Org 1 owner tries to assign a member to Workspace 2 (which belongs to Org 2)
+    add_payload = {
+        "email": "hacker@smartclass.com",
+        "first_name": "H",
+        "last_name": "H",
+        "role_id": teacher_role1_id,
+        "workspace_ids": [ws2_id]
+    }
+    # This should ideally return 400 or 403, but currently returns 200 because of the missing validation.
+    cross_org_add_res = await client.post("/api/v1/organizations/members", json=add_payload, headers=headers1)
+    assert cross_org_add_res.status_code == 403
+
+    # 2. Test Archived Workspace Assignment
+    # Archive Workspace 1 in Org 1
+    ws1_res = await client.get("/api/v1/workspaces", headers=headers1)
+    ws1_id = ws1_res.json()[0]["workspace_id"]
+    await client.delete(f"/api/v1/workspaces/{ws1_id}", headers=headers1)
+
+    add_archived_payload = {
+        "email": "archived_assign@smartclass.com",
+        "first_name": "A",
+        "last_name": "A",
+        "role_id": teacher_role1_id,
+        "workspace_ids": [ws1_id]
+    }
+    archived_add_res = await client.post("/api/v1/organizations/members", json=add_archived_payload, headers=headers1)
+    assert archived_add_res.status_code == 409

@@ -1,11 +1,17 @@
 import uuid
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
+from app.modules.users.models import User
+from app.modules.auth.dependencies import get_current_user
 from app.modules.organizations.dependencies import get_active_organization_id
-from app.modules.organizations.repository import OrganizationRepository
-from app.modules.organizations.member_schemas import WorkspaceResponse
+from app.modules.organizations.workspace_service import WorkspaceService
+from app.modules.organizations.workspace_schemas import (
+    WorkspaceCreateRequest,
+    WorkspaceUpdateRequest,
+    WorkspaceResponse
+)
 from app.modules.rbac.dependencies import require_permission
 from app.modules.rbac.constants import WorkspacePermission
 
@@ -19,17 +25,64 @@ async def list_workspaces(
     _=Depends(require_permission(WorkspacePermission.READ))
 ):
     """Retrieve all workspaces registered under the active organization."""
-    repo = OrganizationRepository(db)
-    workspaces = await repo.get_workspaces(org_id)
-    return [
-        WorkspaceResponse(
-            workspace_id=ws.workspace_id,
-            workspace_name=ws.workspace_name,
-            workspace_description=ws.workspace_description,
-            workspace_status=ws.workspace_status
-        )
-        for ws in workspaces
-    ]
+    service = WorkspaceService(db)
+    return await service.list_workspaces(org_id)
+
+
+@router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)
+async def create_workspace(
+    payload: WorkspaceCreateRequest,
+    current_user: User = Depends(get_current_user),
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.CREATE))
+):
+    """Create a new workspace under the active organization."""
+    service = WorkspaceService(db)
+    workspace_res = await service.create_workspace(org_id, current_user.user_id, payload)
+    await db.commit()
+    return workspace_res
+
+
+@router.get("/{workspace_id}", response_model=WorkspaceResponse)
+async def get_workspace(
+    workspace_id: uuid.UUID,
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.READ))
+):
+    """Fetch details of a single workspace within the active organization context."""
+    service = WorkspaceService(db)
+    return await service.get_workspace(workspace_id, org_id)
+
+
+@router.patch("/{workspace_id}", response_model=WorkspaceResponse)
+async def update_workspace(
+    workspace_id: uuid.UUID,
+    payload: WorkspaceUpdateRequest,
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.UPDATE))
+):
+    """Update workspace metadata or status within the active organization context."""
+    service = WorkspaceService(db)
+    workspace_res = await service.update_workspace(workspace_id, org_id, payload)
+    await db.commit()
+    return workspace_res
+
+
+@router.delete("/{workspace_id}", response_model=WorkspaceResponse)
+async def archive_workspace(
+    workspace_id: uuid.UUID,
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.DELETE))
+):
+    """Archive (soft-delete) a workspace within the active organization context."""
+    service = WorkspaceService(db)
+    workspace_res = await service.archive_workspace(workspace_id, org_id)
+    await db.commit()
+    return workspace_res
 
 
 @router.get("/{workspace_id}/members")
@@ -40,22 +93,5 @@ async def list_workspace_members(
     _=Depends(require_permission(WorkspacePermission.READ))
 ):
     """List all members assigned to a specific workspace."""
-    repo = OrganizationRepository(db)
-    
-    # Secure workspace lookup: Verify workspace belongs to active tenant
-    ws = await repo.get_workspace_by_id(workspace_id)
-    if not ws or ws.workspace_organization_id != org_id:
-        raise HTTPException(status_code=403, detail="Access denied to this workspace.")
-
-    members_data = await repo.get_workspace_members(workspace_id)
-    
-    return [
-        {
-            "user_id": user.user_id,
-            "email": user.user_email,
-            "first_name": user.user_first_name,
-            "last_name": user.user_last_name,
-            "role_name": role.role_name
-        }
-        for user, role in members_data
-    ]
+    service = WorkspaceService(db)
+    return await service.list_workspace_members(workspace_id, org_id)

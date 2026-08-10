@@ -123,13 +123,14 @@ async def list_members(
     search: Optional[str] = Query(None),
     role_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
+    workspace_id: Optional[uuid.UUID] = Query(None),
     org_id: uuid.UUID = Depends(get_active_organization_id),
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(MemberPermission.READ))
 ):
     """List members belonging to the active organization tenant."""
     service = MemberService(db)
-    return await service.list_members(org_id, search, role_id, status)
+    return await service.list_members(org_id, search, role_id, status, workspace_id)
 
 
 @router.get("/members/{member_id}", response_model=MemberResponse)

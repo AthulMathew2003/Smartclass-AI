@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional, Tuple
-from sqlalchemy import select, exists, and_, delete, or_
+from sqlalchemy import select, exists, and_, delete, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.users.models import User
 from app.modules.organizations.models import (
@@ -67,7 +67,8 @@ class OrganizationRepository:
         org_id: uuid.UUID,
         search: Optional[str] = None,
         role_id: Optional[uuid.UUID] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        workspace_id: Optional[uuid.UUID] = None
     ) -> List[Tuple[User, OrganizationMember, Role]]:
         """Fetch organization member profiles along with their user identities and roles, applying filters."""
         stmt = (
@@ -81,6 +82,8 @@ class OrganizationRepository:
             stmt = stmt.where(OrganizationMember.organization_member_role_id == role_id)
         if status:
             stmt = stmt.where(OrganizationMember.organization_member_status == status)
+        if workspace_id:
+            stmt = stmt.join(WorkspaceMember, User.user_id == WorkspaceMember.workspace_member_user_id).where(WorkspaceMember.workspace_member_workspace_id == workspace_id)
         if search:
             search_pattern = f"%{search}%"
             stmt = stmt.where(
@@ -256,6 +259,12 @@ class OrganizationRepository:
         await self.db.flush()
         return member
 
+    async def get_workspaces_by_ids(self, workspace_ids: set[uuid.UUID]) -> List[Workspace]:
+        """Fetch multiple workspaces by their IDs."""
+        stmt = select(Workspace).where(Workspace.workspace_id.in_(workspace_ids))
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def create_workspace(
         self,
         org_id: uuid.UUID,
@@ -290,3 +299,44 @@ class OrganizationRepository:
         self.db.add(member)
         await self.db.flush()
         return member
+
+    async def exists_workspace_name(
+        self,
+        org_id: uuid.UUID,
+        name: str,
+        exclude_workspace_id: Optional[uuid.UUID] = None
+    ) -> bool:
+        """Check if a workspace name exists within an organization (case-insensitive)."""
+        stmt = select(Workspace).where(
+            Workspace.workspace_organization_id == org_id,
+            func.lower(Workspace.workspace_name) == name.strip().lower()
+        )
+        if exclude_workspace_id:
+            stmt = stmt.where(Workspace.workspace_id != exclude_workspace_id)
+        result = await self.db.execute(stmt)
+        return result.scalars().first() is not None
+
+    async def count_workspace_members(self, workspace_id: uuid.UUID) -> int:
+        """Count total members assigned to a workspace."""
+        stmt = select(WorkspaceMember).where(WorkspaceMember.workspace_member_workspace_id == workspace_id)
+        result = await self.db.execute(stmt)
+        return len(result.scalars().all())
+
+    async def update_workspace(
+        self,
+        workspace: Workspace,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[WorkspaceStatus] = None
+    ) -> Workspace:
+        """Update metadata or status of a workspace."""
+        if name is not None:
+            workspace.workspace_name = name.strip()
+        if description is not None:
+            workspace.workspace_description = description
+        if status is not None:
+            workspace.workspace_status = status
+
+        await self.db.flush()
+        return workspace
+

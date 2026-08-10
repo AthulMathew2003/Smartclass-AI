@@ -139,6 +139,7 @@ export default function MembersManagementPage() {
   const [search, setSearch] = useState("");
   const [selectedRole, setSelectedRole] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
+  const [selectedWorkspace, setSelectedWorkspaceFilter] = useState("");
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -165,17 +166,17 @@ export default function MembersManagementPage() {
   const fetchRolesAndWorkspaces = async () => {
     try {
       const rRes = await fetchRoles();
-      setRoles(rRes); 
+      setRoles(rRes);
       if (rRes.length > 0) setAddRole(rRes[0].role_id);
       const wRes = await fetchWorkspaces();
-      setAllWorkspaces(wRes);
+      setAllWorkspaces(wRes.filter((w: any) => w.workspace_status === "active"));
     } catch {}
   };
 
   const loadMembersList = async () => {
     setLoading(true);
     try {
-      const res = await fetchMembers({ search, role_id: selectedRole, status: selectedStatus });
+      const res = await fetchMembers({ search, role_id: selectedRole, status: selectedStatus, workspace_id: selectedWorkspace });
       setMembers(res);
     } catch { setError("Failed to reload members list."); }
     finally { setLoading(false); }
@@ -187,7 +188,7 @@ export default function MembersManagementPage() {
       await loadMembersList();
     };
     init();
-  }, [search, selectedRole, selectedStatus]);
+  }, [search, selectedRole, selectedStatus, selectedWorkspace]);
 
   const handleEmailBlur = async () => {
     if (!addEmail || !addEmail.includes("@")) { setEmailCheckResult(null); return; }
@@ -308,6 +309,15 @@ export default function MembersManagementPage() {
           <option value="">All Statuses</option>
           <option value="active">Active</option>
           <option value="suspended">Suspended</option>
+        </select>
+        <select
+          value={selectedWorkspace}
+          onChange={(e) => setSelectedWorkspaceFilter(e.target.value)}
+          className="ds-input cursor-pointer md:w-44"
+          style={{ appearance: "none" }}
+        >
+          <option value="">All Workspaces</option>
+          {allWorkspaces.map(w => <option key={w.workspace_id} value={w.workspace_id}>{w.workspace_name}</option>)}
         </select>
       </div>
 
