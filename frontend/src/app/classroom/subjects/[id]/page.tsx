@@ -234,6 +234,22 @@ export default function SubjectDetailsPage() {
             )}
           </div>
           <div className="flex items-center gap-3 self-start sm:self-auto">
+            {hasPermission("assignment.read") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  router.push(
+                    workspaceIdFromQuery
+                      ? `/classroom/subjects/${id}/assignments?workspace_id=${workspaceIdFromQuery}`
+                      : `/classroom/subjects/${id}/assignments`
+                  )
+                }
+              >
+                <span className="material-symbols-outlined mr-1.5 text-[18px]">assignment</span>
+                Assignments
+              </Button>
+            )}
             {canEdit && (
               <Button
                 variant="outline"
@@ -265,7 +281,7 @@ export default function SubjectDetailsPage() {
         </TabsList>
         
         <TabsContent value="overview" className="space-y-6 pt-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-6 rounded-xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]">
               <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Assigned Teachers</div>
               <div className="text-3xl font-bold text-[var(--on-surface)]">{teachers.length}</div>
@@ -274,6 +290,27 @@ export default function SubjectDetailsPage() {
               <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Created</div>
               <div className="text-lg font-bold text-[var(--on-surface)]">
                 {new Date(subject.subject_created_at).toLocaleDateString()}
+              </div>
+            </div>
+            <div
+              onClick={() =>
+                router.push(
+                  workspaceIdFromQuery
+                    ? `/classroom/subjects/${id}/assignments?workspace_id=${workspaceIdFromQuery}`
+                    : `/classroom/subjects/${id}/assignments`
+                )
+              }
+              className="p-6 rounded-xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] hover:border-[var(--primary)] transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Coursework</div>
+                <div className="text-lg font-bold text-[var(--on-surface)] group-hover:text-[var(--primary)] transition-colors flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[20px]">assignment</span>
+                  Assignments
+                </div>
+              </div>
+              <div className="text-xs text-[var(--primary)] font-semibold mt-3 flex items-center gap-0.5">
+                View all &rarr;
               </div>
             </div>
           </div>

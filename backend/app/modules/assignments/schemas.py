@@ -20,7 +20,6 @@ class AssignmentUpdateRequest(BaseModel):
 
     assignment_title: Optional[str] = Field(None, min_length=1, max_length=255, alias="title")
     assignment_description: Optional[str] = Field(None, alias="description")
-    assignment_status: Optional[AssignmentStatus] = Field(None, alias="status")
     assignment_due_at: Optional[datetime] = Field(None, alias="due_at")
 
 

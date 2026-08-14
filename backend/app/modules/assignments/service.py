@@ -99,7 +99,7 @@ class AssignmentService:
         is_org_admin: bool,
         payload: AssignmentCreateRequest
     ) -> AssignmentResponse:
-        """Create a new assignment for a subject."""
+        """Create a new assignment for a subject (starts as DRAFT)."""
         subject, workspace = await self._verify_subject_hierarchy(payload.subject_id, org_id)
         await self._verify_teacher_or_admin(
             created_by_user_id,
@@ -125,11 +125,12 @@ class AssignmentService:
         org_id: uuid.UUID,
         subject_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        status_filter: Optional[AssignmentStatus] = None
     ) -> List[AssignmentResponse]:
         """
         List assignments for a subject.
-        - Teachers & Org Admins see all assignments including DRAFT.
+        - Teachers & Org Admins see all assignments including DRAFT and ARCHIVED (or filtered).
         - Students / non-teachers see only published and closed assignments.
         """
         subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
@@ -138,8 +139,9 @@ class AssignmentService:
         is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
         assignments = await self.repo.list_assignments_by_subject(
             subject_id=subject.subject_id,
+            status_filter=status_filter,
             include_drafts=is_teacher,
-            include_archived=False
+            include_archived=is_teacher
         )
         return [AssignmentResponse.model_validate(a) for a in assignments]
 
@@ -153,7 +155,7 @@ class AssignmentService:
     ) -> AssignmentResponse:
         """
         Retrieve a single assignment.
-        - Drafts are invisible to students / non-teachers.
+        - Drafts and archived are invisible to students / non-teachers.
         """
         subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
         await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
@@ -162,13 +164,10 @@ class AssignmentService:
         if not assignment or assignment.assignment_subject_id != subject.subject_id:
             raise NotFoundException("Assignment not found.")
 
-        if assignment.assignment_status == AssignmentStatus.ARCHIVED and not is_org_admin:
-            raise NotFoundException("Assignment not found.")
+        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
 
-        if assignment.assignment_status == AssignmentStatus.DRAFT:
-            is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
-            if not is_teacher:
-                raise NotFoundException("Assignment not found.")
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
+            raise NotFoundException("Assignment not found.")
 
         return AssignmentResponse.model_validate(assignment)
 
@@ -181,7 +180,7 @@ class AssignmentService:
         requesting_user_id: uuid.UUID,
         is_org_admin: bool
     ) -> AssignmentResponse:
-        """Update an existing assignment."""
+        """Update an existing assignment's metadata (title, description, due_at)."""
         subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
         await self._verify_teacher_or_admin(
             requesting_user_id,
@@ -203,10 +202,77 @@ class AssignmentService:
             assignment=assignment,
             title=title,
             description=payload.assignment_description,
-            status=payload.assignment_status,
             due_at=payload.assignment_due_at
         )
         return AssignmentResponse.model_validate(updated)
+
+    async def publish_assignment(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AssignmentResponse:
+        """Publish a DRAFT assignment (DRAFT -> PUBLISHED)."""
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
+            raise ConflictException("Archived assignments cannot be published.")
+
+        if assignment.assignment_status == AssignmentStatus.PUBLISHED:
+            raise ConflictException("Assignment is already published.")
+
+        if assignment.assignment_status != AssignmentStatus.DRAFT:
+            raise ConflictException(f"Cannot publish assignment with status '{assignment.assignment_status.value}'.")
+
+        published = await self.repo.set_assignment_status(assignment, AssignmentStatus.PUBLISHED)
+        return AssignmentResponse.model_validate(published)
+
+    async def close_assignment(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AssignmentResponse:
+        """Close an open assignment (PUBLISHED -> CLOSED)."""
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
+            raise ConflictException("Archived assignments cannot be closed.")
+
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Assignment is already closed.")
+
+        if assignment.assignment_status != AssignmentStatus.PUBLISHED:
+            raise ConflictException("Only published assignments can be closed.")
+
+        closed = await self.repo.set_assignment_status(assignment, AssignmentStatus.CLOSED)
+        return AssignmentResponse.model_validate(closed)
 
     async def archive_assignment(
         self,
@@ -229,6 +295,9 @@ class AssignmentService:
         assignment = await self.repo.get_assignment_by_id(assignment_id)
         if not assignment or assignment.assignment_subject_id != subject.subject_id:
             raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
+            raise ConflictException("Assignment is already archived.")
 
         archived = await self.repo.archive_assignment(assignment)
         return AssignmentResponse.model_validate(archived)

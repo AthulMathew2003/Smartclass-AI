@@ -53,14 +53,24 @@ class AssignmentRepository:
     async def list_assignments_by_subject(
         self,
         subject_id: uuid.UUID,
+        status_filter: Optional[AssignmentStatus] = None,
         include_drafts: bool = True,
         include_archived: bool = False
     ) -> List[Assignment]:
         stmt = select(Assignment).where(Assignment.assignment_subject_id == subject_id)
-        if not include_drafts:
-            stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.DRAFT)
-        if not include_archived:
-            stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.ARCHIVED)
+
+        if status_filter is not None:
+            if status_filter == AssignmentStatus.DRAFT and not include_drafts:
+                return []
+            if status_filter == AssignmentStatus.ARCHIVED and not include_archived:
+                return []
+            stmt = stmt.where(Assignment.assignment_status == status_filter)
+        else:
+            if not include_drafts:
+                stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.DRAFT)
+            if not include_archived:
+                stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.ARCHIVED)
+
         stmt = stmt.order_by(Assignment.assignment_created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
@@ -70,15 +80,12 @@ class AssignmentRepository:
         assignment: Assignment,
         title: Optional[str] = None,
         description: Optional[str] = None,
-        status: Optional[AssignmentStatus] = None,
         due_at: Optional[datetime] = None
     ) -> Assignment:
         if title is not None:
             assignment.assignment_title = title
         if description is not None:
             assignment.assignment_description = description
-        if status is not None:
-            assignment.assignment_status = status
         if due_at is not None:
             assignment.assignment_due_at = due_at
 
@@ -88,6 +95,12 @@ class AssignmentRepository:
         except IntegrityError as e:
             await self.db.rollback()
             raise e
+        return assignment
+
+    async def set_assignment_status(self, assignment: Assignment, status: AssignmentStatus) -> Assignment:
+        assignment.assignment_status = status
+        self.db.add(assignment)
+        await self.db.flush()
         return assignment
 
     async def archive_assignment(self, assignment: Assignment) -> Assignment:

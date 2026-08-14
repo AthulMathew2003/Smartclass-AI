@@ -1,6 +1,6 @@
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, status, Query, Request
+from typing import List, Optional
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -9,6 +9,7 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.organizations.models import Organization
 from app.modules.rbac.dependencies import get_current_organization, require_permission
 from app.modules.rbac.constants import AssignmentPermission
+from app.modules.assignments.models import AssignmentStatus
 from app.modules.assignments.service import AssignmentService
 from app.modules.assignments.schemas import (
     AssignmentCreateRequest,
@@ -22,6 +23,7 @@ router = APIRouter()
 @router.get("", response_model=List[AssignmentResponse])
 async def list_assignments(
     subject_id: uuid.UUID = Query(..., description="Subject ID to list assignments for"),
+    status: Optional[AssignmentStatus] = Query(None, description="Filter assignments by status"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -34,7 +36,8 @@ async def list_assignments(
         org_id=org.organization_id,
         subject_id=subject_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        status_filter=status
     )
 
 
@@ -46,7 +49,7 @@ async def create_assignment(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(AssignmentPermission.CREATE))
 ):
-    """Create a new assignment for a subject (Teachers/Admins only)."""
+    """Create a new assignment for a subject (Teachers/Admins only, starts as DRAFT)."""
     service = AssignmentService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.create_assignment(
@@ -90,7 +93,7 @@ async def update_assignment(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(AssignmentPermission.UPDATE))
 ):
-    """Update an assignment's details or status."""
+    """Update an assignment's title, description, or due date."""
     service = AssignmentService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.update_assignment(
@@ -98,6 +101,52 @@ async def update_assignment(
         subject_id=subject_id,
         assignment_id=assignment_id,
         payload=payload,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.post("/{assignment_id}/publish", response_model=AssignmentResponse)
+async def publish_assignment(
+    assignment_id: uuid.UUID,
+    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.UPDATE))
+):
+    """Publish a draft assignment (DRAFT -> PUBLISHED)."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.publish_assignment(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        assignment_id=assignment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.post("/{assignment_id}/close", response_model=AssignmentResponse)
+async def close_assignment(
+    assignment_id: uuid.UUID,
+    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.UPDATE))
+):
+    """Close an active assignment (PUBLISHED -> CLOSED)."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.close_assignment(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
         is_org_admin=is_org_admin
     )
