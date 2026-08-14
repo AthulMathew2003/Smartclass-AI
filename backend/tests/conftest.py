@@ -70,7 +70,9 @@ async def test_engine():
             ("subject.teacher.add", "Add teachers to subjects"),
             ("subject.teacher.remove", "Remove teachers from subjects"),
             ("assignment.create", "Create assignments"),
+            ("assignment.read", "View assignments"),
             ("assignment.update", "Update assignments"),
+            ("assignment.delete", "Archive or delete assignments"),
             ("assignment.grade", "Grade student assignments"),
             ("attendance.view", "View attendance records"),
             ("attendance.manage", "Take or update attendance"),
@@ -98,23 +100,24 @@ async def test_engine():
                 "member.create", "member.read", "member.update", "member.delete",
                 "workspace.create", "workspace.read", "workspace.update", "workspace.delete",
                 "subject.create", "subject.read", "subject.update", "subject.delete",
-                "subject.teacher.add", "subject.teacher.remove", "assignment.create", "assignment.update",
+                "subject.teacher.add", "subject.teacher.remove",
+                "assignment.create", "assignment.read", "assignment.update", "assignment.delete",
                 "attendance.view", "attendance.manage", "analytics.view"
             ],
             "Teacher": [
                 "workspace.read", "subject.create", "subject.read", "subject.update",
                 "subject.teacher.add", "subject.teacher.remove",
-                "assignment.create", "assignment.update", "assignment.grade",
+                "assignment.create", "assignment.read", "assignment.update", "assignment.delete", "assignment.grade",
                 "attendance.view", "attendance.manage", "analytics.view", "ai.use"
             ],
             "Student": [
-                "workspace.read", "subject.read", "attendance.view", "ai.use"
+                "workspace.read", "subject.read", "assignment.read", "attendance.view", "ai.use"
             ],
             "Parent": [
-                "workspace.read", "attendance.view"
+                "workspace.read", "assignment.read", "attendance.view"
             ],
             "Staff": [
-                "workspace.read", "attendance.view", "analytics.view"
+                "workspace.read", "assignment.read", "attendance.view", "analytics.view"
             ]
         }
 

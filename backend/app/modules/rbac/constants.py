@@ -36,7 +36,9 @@ class SubjectPermission:
 
 class AssignmentPermission:
     CREATE = "assignment.create"
+    READ = "assignment.read"
     UPDATE = "assignment.update"
+    DELETE = "assignment.delete"
     GRADE = "assignment.grade"
 
 

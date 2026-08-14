@@ -64,6 +64,7 @@ class Subject(Base):
     )
 
     _teachers = relationship("SubjectTeacher", back_populates="subject", cascade="all, delete-orphan")
+    assignments = relationship("Assignment", back_populates="subject", cascade="all, delete-orphan")
 
 
 class SubjectTeacher(Base):

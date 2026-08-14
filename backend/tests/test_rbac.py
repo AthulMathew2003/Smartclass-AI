@@ -199,30 +199,32 @@ async def test_me_permissions_endpoint(client: AsyncClient, db_session):
     token_multi = login_multi.json()["access_token"]
     headers_multi = {"Authorization": f"Bearer {token_multi}", "X-Organization-Id": str(org_a.organization_id)}
 
-    # ── Test 1: Owner gets all 25 permissions ──
+    # ── Test 1: Owner gets all 27 permissions ──
     res = await client.get("/api/v1/roles/me/permissions", headers=headers_owner)
     assert res.status_code == 200
     data = res.json()
     assert data["organization_id"] == str(org_a.organization_id)
-    assert len(data["permissions"]) == 25
+    assert len(data["permissions"]) == 27
 
-    # ── Test 2: Teacher gets exactly 13 permissions ──
+    # ── Test 2: Teacher gets exactly 15 permissions ──
     res = await client.get("/api/v1/roles/me/permissions", headers=headers_teacher)
     assert res.status_code == 200
     teacher_perms = res.json()["permissions"]
-    assert len(teacher_perms) == 13
+    assert len(teacher_perms) == 15
     assert "workspace.read" in teacher_perms
     assert "subject.create" in teacher_perms
     assert "ai.use" in teacher_perms
+    assert "assignment.read" in teacher_perms
+    assert "assignment.create" in teacher_perms
     assert "member.create" not in teacher_perms
     assert "settings.manage" not in teacher_perms
 
-    # ── Test 3: Student gets exactly 4 permissions ──
+    # ── Test 3: Student gets exactly 5 permissions ──
     res = await client.get("/api/v1/roles/me/permissions", headers=headers_student)
     assert res.status_code == 200
     student_perms = res.json()["permissions"]
-    assert len(student_perms) == 4
-    assert set(student_perms) == {"workspace.read", "attendance.view", "ai.use", "subject.read"}
+    assert len(student_perms) == 5
+    assert set(student_perms) == {"workspace.read", "attendance.view", "ai.use", "subject.read", "assignment.read"}
 
     # ── Test 4: Suspended membership returns 403 ──
     from app.modules.organizations.models import OrganizationMember
@@ -281,17 +283,17 @@ async def test_me_permissions_endpoint(client: AsyncClient, db_session):
     ))
     await db_session.commit()
 
-    # Multi user in Org A (Teacher) → 13 permissions (includes subject.teacher.add & subject.teacher.remove)
+    # Multi user in Org A (Teacher) → 15 permissions (includes assignment permissions)
     res_a = await client.get("/api/v1/roles/me/permissions", headers=headers_multi)
     assert res_a.status_code == 200
-    assert len(res_a.json()["permissions"]) == 13
+    assert len(res_a.json()["permissions"]) == 15
 
-    # Multi user in Org B (Student) → 4 permissions
+    # Multi user in Org B (Student) → 5 permissions
     headers_multi_b = {**headers_multi, "X-Organization-Id": str(org_b.organization_id)}
     res_b = await client.get("/api/v1/roles/me/permissions", headers=headers_multi_b)
     assert res_b.status_code == 200
-    assert len(res_b.json()["permissions"]) == 4
-    assert set(res_b.json()["permissions"]) == {"workspace.read", "attendance.view", "ai.use", "subject.read"}
+    assert len(res_b.json()["permissions"]) == 5
+    assert set(res_b.json()["permissions"]) == {"workspace.read", "attendance.view", "ai.use", "subject.read", "assignment.read"}
 
     # Verify org IDs match in response
     assert res_a.json()["organization_id"] == str(org_a.organization_id)
