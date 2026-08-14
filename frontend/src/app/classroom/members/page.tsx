@@ -1,14 +1,33 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { fetchRoles } from "../../../lib/auth";
 import { fetchWorkspaces } from "../../../lib/workspaces";
-import { fetchMembers, checkMemberEmail, addMember, updateMember, updateMemberStatus, deleteMember, updateMemberWorkspaces, Member } from "../../../lib/members";
+import {
+  fetchMembers,
+  checkMemberEmail,
+  addMember,
+  updateMember,
+  updateMemberStatus,
+  deleteMember,
+  updateMemberWorkspaces,
+  requestProfilePhotoUploadUrl,
+  confirmProfilePhotoUpload,
+  deleteProfilePhoto,
+  uploadFileToS3,
+  Member,
+} from "../../../lib/members";
 import { hasPermission, isPermissionsLoaded } from "../../../lib/permissions";
 import ForbiddenState from "../components/ForbiddenState";
 
 // ── Types ─────────────────────────────────────────────────────
-interface RoleBrief { role_id: string; role_name: string; }
+interface RoleBrief {
+  role_id: string;
+  role_name: string;
+}
+
+const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const MAX_PHOTO_SIZE = 5 * 1024 * 1024; // 5 MB
 
 // ── Shared sub-components ─────────────────────────────────────
 function FormLabel({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
@@ -44,8 +63,17 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function Avatar({ name, email }: { name: string; email: string }) {
+function Avatar({ name, email, profileImageUrl }: { name: string; email: string; profileImageUrl?: string | null }) {
   const letter = name?.[0]?.toUpperCase() || email?.[0]?.toUpperCase() || "?";
+  if (profileImageUrl) {
+    return (
+      <img
+        src={profileImageUrl}
+        alt={name || email}
+        className="w-9 h-9 rounded-xl object-cover shrink-0 ring-1 ring-[var(--outline-variant)]"
+      />
+    );
+  }
   return (
     <div
       className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0"
@@ -81,8 +109,8 @@ function AlertBanner({ type, message, onDismiss }: { type: "error" | "success"; 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in" style={{ backgroundColor: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}>
-      <div className="w-full max-w-lg animate-slide-up" style={{ backgroundColor: "var(--surface)", border: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)", borderRadius: "1.25rem", boxShadow: "0 20px 60px rgba(0,0,0,0.12)" }}>
-        <div className="flex items-center justify-between px-7 pt-6 pb-5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)" }}>
+      <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slide-up" style={{ backgroundColor: "var(--surface)", border: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)", borderRadius: "1.25rem", boxShadow: "0 20px 60px rgba(0,0,0,0.12)" }}>
+        <div className="sticky top-0 z-10 flex items-center justify-between px-7 pt-6 pb-5" style={{ backgroundColor: "var(--surface)", borderBottom: "1px solid color-mix(in srgb, var(--outline-variant) 30%, transparent)" }}>
           <h2 className="text-lg font-bold" style={{ color: "var(--on-surface)" }}>{title}</h2>
           <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-colors" style={{ color: "var(--on-surface-variant)" }}
             onMouseEnter={e => (e.currentTarget.style.backgroundColor = "var(--surface-container)")}
@@ -131,6 +159,7 @@ export default function MembersManagementPage() {
   if (!hasPermission("member.read")) {
     return <ForbiddenState message="You don't have permission to view organization members." />;
   }
+
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<Member[]>([]);
   const [roles, setRoles] = useState<RoleBrief[]>([]);
@@ -145,6 +174,7 @@ export default function MembersManagementPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
 
+  // Add Member State
   const [addEmail, setAddEmail] = useState("");
   const [addFirstName, setAddFirstName] = useState("");
   const [addLastName, setAddLastName] = useState("");
@@ -154,12 +184,25 @@ export default function MembersManagementPage() {
   const [emailCheckResult, setEmailCheckResult] = useState<string | null>(null);
   const [emailChecking, setEmailChecking] = useState(false);
 
+  // Photo State for Add Member
+  const [addPhotoFile, setAddPhotoFile] = useState<File | null>(null);
+  const [addPhotoPreview, setAddPhotoPreview] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const addFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit Member State
   const [editFirstName, setEditFirstName] = useState("");
   const [editLastName, setEditLastName] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [editRole, setEditRole] = useState("");
   const [editWorkspaces, setEditWorkspaces] = useState<string[]>([]);
+  const [editPhotoFile, setEditPhotoFile] = useState<File | null>(null);
+  const [editPhotoPreview, setEditPhotoPreview] = useState<string | null>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Process / Feedback states
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadStep, setUploadStep] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -203,33 +246,185 @@ export default function MembersManagementPage() {
     finally { setEmailChecking(false); }
   };
 
+  // Photo Selection Handler
+  const handlePhotoSelect = (file: File | null, mode: "add" | "edit") => {
+    setPhotoError(null);
+    if (!file) {
+      if (mode === "add") {
+        setAddPhotoFile(null);
+        setAddPhotoPreview(null);
+      } else {
+        setEditPhotoFile(null);
+        setEditPhotoPreview(null);
+      }
+      return;
+    }
+
+    // Validate MIME type
+    if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+      setPhotoError("Invalid format. Please select a JPEG, PNG, or WebP image (SVG is not supported).");
+      return;
+    }
+
+    // Validate file size
+    if (file.size > MAX_PHOTO_SIZE) {
+      setPhotoError("Image exceeds 5 MB. Please select a smaller photo.");
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    if (mode === "add") {
+      setAddPhotoFile(file);
+      setAddPhotoPreview(previewUrl);
+    } else {
+      setEditPhotoFile(file);
+      setEditPhotoPreview(previewUrl);
+    }
+  };
+
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null); setSuccess(null);
+    setError(null);
+    setSuccess(null);
+    setPhotoError(null);
+
+    // Profile photo is required for new member creation
+    if (!addPhotoFile) {
+      setPhotoError("Profile photo is required. Please select an image for this member.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    let createdMemberId: string | null = null;
+
     try {
-      await addMember({ email: addEmail, first_name: addFirstName, last_name: addLastName, phone: addPhone || null, role_id: addRole, workspace_ids: addWorkspaces });
-      setSuccess("Member added successfully.");
+      // Step 1: Create user record & obtain upload URL
+      setUploadStep("Creating member record...");
+      const createRes = await addMember({
+        email: addEmail,
+        first_name: addFirstName,
+        last_name: addLastName,
+        phone: addPhone || null,
+        role_id: addRole,
+        workspace_ids: addWorkspaces,
+        content_type: addPhotoFile.type,
+        file_size: addPhotoFile.size,
+      });
+
+      createdMemberId = createRes.organization_member_id;
+
+      // Step 2: Upload photo to S3 via presigned PUT URL
+      if (createRes.profile_photo_upload) {
+        setUploadStep("Uploading photo to secure storage...");
+        await uploadFileToS3(createRes.profile_photo_upload.upload_url, addPhotoFile);
+
+        // Step 3: Confirm upload with backend
+        setUploadStep("Confirming photo attachment...");
+        await confirmProfilePhotoUpload(createRes.user_id, createRes.profile_photo_upload.key);
+      }
+
+      setSuccess("Member and profile photo added successfully.");
       setAddDialogOpen(false);
-      setAddEmail(""); setAddFirstName(""); setAddLastName(""); setAddPhone(""); setAddWorkspaces([]); setEmailCheckResult(null);
-      loadMembersList();
-    } catch (err: any) { setError(err.message); }
+      setAddEmail("");
+      setAddFirstName("");
+      setAddLastName("");
+      setAddPhone("");
+      setAddWorkspaces([]);
+      setAddPhotoFile(null);
+      setAddPhotoPreview(null);
+      setEmailCheckResult(null);
+      await loadMembersList();
+    } catch (err: any) {
+      setError(err.message || "Failed to create member and upload photo.");
+      // If user creation succeeded but upload confirmation failed, clean up member to prevent incomplete records
+      if (createdMemberId) {
+        try {
+          await deleteMember(createdMemberId);
+        } catch {
+          // Non-critical cleanup
+        }
+      }
+    } finally {
+      setIsSubmitting(false);
+      setUploadStep(null);
+    }
   };
 
   const handleOpenEdit = (m: Member) => {
-    setSelectedMember(m); setEditFirstName(m.first_name || ""); setEditLastName(m.last_name || "");
-    setEditPhone(m.phone || ""); setEditRole(m.role_id); setEditWorkspaces(m.workspaces.map(w => w.workspace_id));
+    setSelectedMember(m);
+    setEditFirstName(m.first_name || "");
+    setEditLastName(m.last_name || "");
+    setEditPhone(m.phone || "");
+    setEditRole(m.role_id);
+    setEditWorkspaces(m.workspaces.map(w => w.workspace_id));
+    setEditPhotoFile(null);
+    setEditPhotoPreview(m.profile_image_url || null);
+    setPhotoError(null);
     setEditDialogOpen(true);
   };
 
   const handleEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedMember) return;
-    setError(null); setSuccess(null);
+    setError(null);
+    setSuccess(null);
+    setPhotoError(null);
+    setIsSubmitting(true);
+
     try {
-      await updateMember(selectedMember.organization_member_id, { first_name: editFirstName, last_name: editLastName, phone: editPhone || null, role_id: editRole });
+      // 1. Update basic info and role
+      await updateMember(selectedMember.organization_member_id, {
+        first_name: editFirstName,
+        last_name: editLastName,
+        phone: editPhone || null,
+        role_id: editRole,
+      });
+
+      // 2. Update workspace assignments
       await updateMemberWorkspaces(selectedMember.user_id, editWorkspaces);
-      setSuccess("Member updated successfully."); setEditDialogOpen(false); loadMembersList();
-    } catch (err: any) { setError(err.message); }
+
+      // 3. Update photo if a new one was selected
+      if (editPhotoFile) {
+        setUploadStep("Requesting photo upload URL...");
+        const uploadInfo = await requestProfilePhotoUploadUrl(
+          selectedMember.user_id,
+          editPhotoFile.type,
+          editPhotoFile.size
+        );
+
+        setUploadStep("Uploading updated photo...");
+        await uploadFileToS3(uploadInfo.upload_url, editPhotoFile);
+
+        setUploadStep("Finalizing photo update...");
+        await confirmProfilePhotoUpload(selectedMember.user_id, uploadInfo.key);
+      }
+
+      setSuccess("Member updated successfully.");
+      setEditDialogOpen(false);
+      await loadMembersList();
+    } catch (err: any) {
+      setError(err.message || "Failed to update member.");
+    } finally {
+      setIsSubmitting(false);
+      setUploadStep(null);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    if (!selectedMember) return;
+    if (!confirm("Remove this member's profile photo?")) return;
+    setIsSubmitting(true);
+    try {
+      await deleteProfilePhoto(selectedMember.user_id);
+      setEditPhotoPreview(null);
+      setEditPhotoFile(null);
+      setSuccess("Profile photo removed.");
+      await loadMembersList();
+    } catch (err: any) {
+      setError(err.message || "Failed to remove profile photo.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const toggleStatus = async (m: Member) => {
@@ -262,11 +457,16 @@ export default function MembersManagementPage() {
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" style={{ color: "var(--on-surface)" }}>Organization Members</h1>
-          <p className="text-sm mt-1" style={{ color: "var(--on-surface-variant)" }}>Manage profiles, roles, and workspace assignments.</p>
+          <p className="text-sm mt-1" style={{ color: "var(--on-surface-variant)" }}>Manage profiles, roles, photos, and workspace assignments.</p>
         </div>
         {hasPermission("member.create") && (
           <button
-            onClick={() => setAddDialogOpen(true)}
+            onClick={() => {
+              setAddDialogOpen(true);
+              setPhotoError(null);
+              setAddPhotoFile(null);
+              setAddPhotoPreview(null);
+            }}
             className="ds-btn-primary shrink-0 px-5 py-2.5"
           >
             <span className="material-symbols-outlined text-[18px]">person_add</span>
@@ -353,7 +553,7 @@ export default function MembersManagementPage() {
                   >
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <Avatar name={`${m.first_name}${m.last_name}`} email={m.email} />
+                        <Avatar name={`${m.first_name} ${m.last_name}`} email={m.email} profileImageUrl={m.profile_image_url} />
                         <div>
                           <div className="font-semibold" style={{ color: "var(--on-surface)" }}>{m.first_name} {m.last_name}</div>
                           <div className="text-xs mt-0.5" style={{ color: "var(--on-surface-variant)" }}>{m.phone || "—"}</div>
@@ -417,8 +617,62 @@ export default function MembersManagementPage() {
 
       {/* ── Add Member Modal ─────────────────────────────── */}
       {addDialogOpen && (
-        <Modal title="Add New Member" onClose={() => setAddDialogOpen(false)}>
+        <Modal title="Add New Member" onClose={() => !isSubmitting && setAddDialogOpen(false)}>
           <form onSubmit={handleAddMember} className="space-y-4">
+            {/* ── Profile Photo Picker (Required) ── */}
+            <div>
+              <FormLabel>Profile Photo <span className="text-red-500 font-bold">*</span></FormLabel>
+              <div className="flex items-center gap-4 p-3 rounded-xl border border-dashed border-[var(--outline-variant)] bg-[var(--surface-container-low)]">
+                {addPhotoPreview ? (
+                  <div className="relative group">
+                    <img
+                      src={addPhotoPreview}
+                      alt="Preview"
+                      className="w-16 h-16 rounded-full object-cover ring-2 ring-[var(--primary)] shadow-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handlePhotoSelect(null, "add")}
+                      className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center text-xs shadow hover:bg-red-600 transition-colors"
+                      title="Remove photo"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => addFileInputRef.current?.click()}
+                    className="w-16 h-16 rounded-full flex flex-col items-center justify-center cursor-pointer transition-all bg-[var(--surface-container-high)] text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-highest)] border border-dashed border-[var(--outline-variant)]"
+                  >
+                    <span className="material-symbols-outlined text-[24px]">add_a_photo</span>
+                  </div>
+                )}
+                <div className="flex-1 text-xs">
+                  <p className="font-semibold text-[var(--on-surface)]">
+                    {addPhotoFile ? addPhotoFile.name : "Select a profile picture"}
+                  </p>
+                  <p className="text-[11px] text-[var(--on-surface-variant)] mt-0.5">
+                    JPEG, PNG, or WebP up to 5 MB.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => addFileInputRef.current?.click()}
+                    className="mt-2 text-xs font-semibold text-[var(--primary)] hover:underline cursor-pointer"
+                  >
+                    {addPhotoFile ? "Change photo" : "Browse file..."}
+                  </button>
+                  <input
+                    ref={addFileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => handlePhotoSelect(e.target.files?.[0] || null, "add")}
+                  />
+                </div>
+              </div>
+              {photoError && <p className="text-xs text-red-500 mt-1.5 font-medium">{photoError}</p>}
+            </div>
+
             <div>
               <FormLabel htmlFor="add-email">Email Address</FormLabel>
               <ModalInput id="add-email" type="email" placeholder="name@school.com" value={addEmail} onChange={(e) => setAddEmail(e.target.value)} onBlur={handleEmailBlur} required />
@@ -454,15 +708,81 @@ export default function MembersManagementPage() {
               <FormLabel>Workspace Assignments</FormLabel>
               <WorkspaceList workspaces={allWorkspaces} selected={addWorkspaces} onChange={(id, c) => toggleWorkspace(id, c, "add")} />
             </div>
-            <button type="submit" className="ds-btn-primary w-full py-3 mt-1">Save Member</button>
+
+            {uploadStep && (
+              <div className="p-3 rounded-xl bg-[var(--surface-container-high)] text-xs flex items-center gap-2.5 font-medium text-[var(--primary)] animate-pulse">
+                <div className="w-3.5 h-3.5 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin shrink-0" />
+                <span>{uploadStep}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="ds-btn-primary w-full py-3 mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? "Creating Member..." : "Save Member & Upload Photo"}
+            </button>
           </form>
         </Modal>
       )}
 
       {/* ── Edit Member Modal ─────────────────────────────── */}
       {editDialogOpen && selectedMember && (
-        <Modal title="Edit Member" onClose={() => setEditDialogOpen(false)}>
+        <Modal title="Edit Member" onClose={() => !isSubmitting && setEditDialogOpen(false)}>
           <form onSubmit={handleEditMember} className="space-y-4">
+            {/* ── Profile Photo Section ── */}
+            <div>
+              <FormLabel>Profile Photo</FormLabel>
+              <div className="flex items-center gap-4 p-3 rounded-xl border border-dashed border-[var(--outline-variant)] bg-[var(--surface-container-low)]">
+                {editPhotoPreview ? (
+                  <img
+                    src={editPhotoPreview}
+                    alt="Current photo"
+                    className="w-16 h-16 rounded-full object-cover ring-2 ring-[var(--primary)] shadow-sm"
+                  />
+                ) : (
+                  <div className="w-16 h-16 rounded-full flex items-center justify-center font-bold text-lg bg-[var(--surface-container-high)] text-[var(--primary)]">
+                    {selectedMember.first_name?.[0]?.toUpperCase() || "?"}
+                  </div>
+                )}
+                <div className="flex-1 text-xs">
+                  <p className="font-semibold text-[var(--on-surface)]">
+                    {editPhotoFile ? editPhotoFile.name : (editPhotoPreview ? "Current profile photo" : "No photo attached")}
+                  </p>
+                  <p className="text-[11px] text-[var(--on-surface-variant)] mt-0.5">
+                    JPEG, PNG, or WebP up to 5 MB.
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => editFileInputRef.current?.click()}
+                      className="text-xs font-semibold text-[var(--primary)] hover:underline cursor-pointer"
+                    >
+                      {editPhotoPreview ? "Replace photo..." : "Upload photo..."}
+                    </button>
+                    {editPhotoPreview && (
+                      <button
+                        type="button"
+                        onClick={handleRemovePhoto}
+                        className="text-xs font-semibold text-red-500 hover:underline cursor-pointer"
+                      >
+                        Remove photo
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={editFileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => handlePhotoSelect(e.target.files?.[0] || null, "edit")}
+                  />
+                </div>
+              </div>
+              {photoError && <p className="text-xs text-red-500 mt-1.5 font-medium">{photoError}</p>}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <FormLabel htmlFor="edit-first">First Name</FormLabel>
@@ -495,7 +815,21 @@ export default function MembersManagementPage() {
               <FormLabel>Workspace Assignments</FormLabel>
               <WorkspaceList workspaces={allWorkspaces} selected={editWorkspaces} onChange={(id, c) => toggleWorkspace(id, c, "edit")} />
             </div>
-            <button type="submit" className="ds-btn-primary w-full py-3 mt-1">Apply Changes</button>
+
+            {uploadStep && (
+              <div className="p-3 rounded-xl bg-[var(--surface-container-high)] text-xs flex items-center gap-2.5 font-medium text-[var(--primary)] animate-pulse">
+                <div className="w-3.5 h-3.5 border-2 border-[var(--primary)] border-t-transparent rounded-full animate-spin shrink-0" />
+                <span>{uploadStep}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="ds-btn-primary w-full py-3 mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? "Applying Changes..." : "Apply Changes"}
+            </button>
           </form>
         </Modal>
       )}

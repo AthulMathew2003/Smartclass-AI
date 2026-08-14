@@ -7,6 +7,8 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 
+from app.modules.users.profile_photo import ProfilePhotoService
+
 from app.db.session import get_db
 from app.core.config import settings
 from app.core.security import verify_password
@@ -87,12 +89,14 @@ async def register(payload: RegisterRequest, response: Response, db: AsyncSessio
 
     _set_refresh_cookie(response, raw_rt, expires_at)
 
+    photo_service = ProfilePhotoService()
     user_info = UserInfo(
         id=str(user.user_id),
         email=user.user_email,
         first_name=user.user_first_name,
         last_name=user.user_last_name,
-        profile_image=user.user_profile_image
+        profile_image=user.user_profile_image,
+        profile_image_url=photo_service.resolve_photo_url(user.user_profile_image)
     )
     return TokenResponse(access_token=access_token, user=user_info)
 
@@ -125,12 +129,14 @@ async def login(payload: LoginRequest, response: Response, db: AsyncSession = De
 
     _set_refresh_cookie(response, raw_rt, expires_at)
 
+    photo_service = ProfilePhotoService()
     user_info = UserInfo(
         id=str(user.user_id),
         email=user.user_email,
         first_name=user.user_first_name,
         last_name=user.user_last_name,
-        profile_image=user.user_profile_image
+        profile_image=user.user_profile_image,
+        profile_image_url=photo_service.resolve_photo_url(user.user_profile_image)
     )
     return TokenResponse(access_token=access_token, user=user_info)
 
@@ -205,7 +211,6 @@ async def google_callback(
                     email=email,
                     first_name=profile.get("given_name"),
                     last_name=profile.get("family_name"),
-                    profile_image=profile.get("picture"),
                     email_verified=profile.get("email_verified", False)
                 )
                 await auth_service.link_oauth(user_id=user.user_id, provider=OAuthProvider.GOOGLE, provider_user_id=profile["sub"])
@@ -329,7 +334,6 @@ async def github_callback(
                     email=email,
                     first_name=first_name,
                     last_name=last_name,
-                    profile_image=profile.get("avatar_url"),
                     email_verified=True
                 )
                 await auth_service.link_oauth(user_id=user.user_id, provider=OAuthProvider.GITHUB, provider_user_id=provider_user_id)
@@ -394,12 +398,14 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
 
     _set_refresh_cookie(response, raw_new_rt, expires_at)
 
+    photo_service = ProfilePhotoService()
     user_info = UserInfo(
         id=str(user.user_id),
         email=user.user_email,
         first_name=user.user_first_name,
         last_name=user.user_last_name,
-        profile_image=user.user_profile_image
+        profile_image=user.user_profile_image,
+        profile_image_url=photo_service.resolve_photo_url(user.user_profile_image)
     )
     return TokenResponse(access_token=access_token, user=user_info)
 
@@ -424,12 +430,14 @@ async def logout(request: Request, response: Response, db: AsyncSession = Depend
 @router.get("/me", response_model=UserInfo)
 async def get_me(current_user: User = Depends(get_current_user)):
     """Fetch current user profile details."""
+    photo_service = ProfilePhotoService()
     return UserInfo(
         id=str(current_user.user_id),
         email=current_user.user_email,
         first_name=current_user.user_first_name,
         last_name=current_user.user_last_name,
-        profile_image=current_user.user_profile_image
+        profile_image=current_user.user_profile_image,
+        profile_image_url=photo_service.resolve_photo_url(current_user.user_profile_image)
     )
 
 

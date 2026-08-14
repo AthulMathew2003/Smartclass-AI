@@ -15,7 +15,8 @@ from app.modules.organizations.member_schemas import (
     MemberCreateRequest,
     MemberUpdateRequest,
     MemberStatusUpdateRequest,
-    MemberResponse
+    MemberResponse,
+    MemberCreateResponse
 )
 from sqlalchemy import select
 from app.modules.rbac.dependencies import require_permission
@@ -145,7 +146,7 @@ async def get_member_details(
     return await service.get_member(org_id, member_id)
 
 
-@router.post("/members", response_model=MemberResponse)
+@router.post("/members", response_model=MemberCreateResponse)
 async def add_member(
     payload: MemberCreateRequest,
     org_id: uuid.UUID = Depends(get_active_organization_id),
@@ -154,9 +155,9 @@ async def add_member(
 ):
     """Create a new member (reusing profile if the user exists, creating new user profile + temp password if they don't)."""
     service = MemberService(db)
-    member_info = await service.create_member(org_id, payload)
+    result = await service.create_member(org_id, payload)
     await db.commit()
-    return member_info
+    return result
 
 
 @router.patch("/members/{member_id}", response_model=MemberResponse)

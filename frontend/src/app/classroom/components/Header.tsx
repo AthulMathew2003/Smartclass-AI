@@ -110,12 +110,20 @@ export default function Header({
 
         {/* User chip */}
         <div className="flex items-center gap-2.5">
-          <div
-            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shadow"
-            style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
-          >
-            {initials}
-          </div>
+          {user?.profile_image_url ? (
+            <img
+              src={user.profile_image_url}
+              alt={displayName}
+              className="w-8 h-8 rounded-full object-cover shadow ring-1 ring-[var(--outline-variant)]"
+            />
+          ) : (
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shadow"
+              style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
+            >
+              {initials}
+            </div>
+          )}
           <div className="hidden sm:block text-left">
             <span className="text-xs font-bold block leading-tight" style={{ color: "var(--on-surface)" }}>
               {displayName}

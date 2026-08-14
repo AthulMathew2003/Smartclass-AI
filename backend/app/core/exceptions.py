@@ -35,3 +35,10 @@ class ValidationException(AppException):
     """Raised when request data validation fails."""
     def __init__(self, message: str = "Validation failed."):
         super().__init__(message=message, code="VALIDATION_ERROR", status_code=422)
+
+
+class StorageException(AppException):
+    """Raised when an S3 or storage operation fails."""
+    def __init__(self, message: str = "Storage operation failed.", code: str = "STORAGE_ERROR", status_code: int = 500):
+        super().__init__(message=message, code=code, status_code=status_code)
+

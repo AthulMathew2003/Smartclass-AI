@@ -1,16 +1,19 @@
 import uuid
 import secrets
-from typing import List, Optional
+from typing import List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.users.models import User, UserStatus
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
+from app.modules.users.profile_photo import ProfilePhotoService
 from app.modules.organizations.models import Organization, OrganizationMember, Role, OrganizationMemberStatus, WorkspaceStatus
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.organizations.member_schemas import (
     MemberCreateRequest,
     MemberUpdateRequest,
     MemberResponse,
+    MemberCreateResponse,
+    ProfilePhotoUploadInfo,
     WorkspaceBrief
 )
 from app.core.exceptions import ConflictException, NotFoundException, ForbiddenException
@@ -22,6 +25,37 @@ class MemberService:
         self.repo = OrganizationRepository(db)
         self.user_repo = UserRepository(db)
         self.user_service = UserService(db)
+        self.photo_service = ProfilePhotoService()
+
+    def _build_member_response(
+        self,
+        user: User,
+        member: OrganizationMember,
+        role: Role,
+        ws_briefs: List[WorkspaceBrief],
+    ) -> MemberResponse:
+        """Build a MemberResponse with resolved profile_image_url."""
+        return MemberResponse(
+            user_id=user.user_id,
+            email=user.user_email,
+            first_name=user.user_first_name,
+            last_name=user.user_last_name,
+            phone=user.user_phone,
+            profile_image_url=self.photo_service.resolve_photo_url(user.user_profile_image),
+            organization_member_id=member.organization_member_id,
+            status=member.organization_member_status,
+            role_id=role.role_id,
+            role_name=role.role_name,
+            workspaces=ws_briefs
+        )
+
+    async def _get_workspace_briefs(self, org_id: uuid.UUID, user_id: uuid.UUID) -> List[WorkspaceBrief]:
+        """Fetch workspace assignments for a user in an organization."""
+        workspaces = await self.repo.get_user_workspace_assignments(org_id, user_id)
+        return [
+            WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
+            for w in workspaces
+        ]
 
     async def _validate_workspace_assignments(self, org_id: uuid.UUID, workspace_ids: List[uuid.UUID]):
         unique_ws_ids = set(workspace_ids)
@@ -63,27 +97,8 @@ class MemberService:
         
         responses = []
         for user, member, role in db_members:
-            # Fetch assigned workspaces for this user in this organization
-            workspaces = await self.repo.get_user_workspace_assignments(org_id, user.user_id)
-            ws_briefs = [
-                WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
-                for w in workspaces
-            ]
-            
-            responses.append(
-                MemberResponse(
-                    user_id=user.user_id,
-                    email=user.user_email,
-                    first_name=user.user_first_name,
-                    last_name=user.user_last_name,
-                    phone=user.user_phone,
-                    organization_member_id=member.organization_member_id,
-                    status=member.organization_member_status,
-                    role_id=role.role_id,
-                    role_name=role.role_name,
-                    workspaces=ws_briefs
-                )
-            )
+            ws_briefs = await self._get_workspace_briefs(org_id, user.user_id)
+            responses.append(self._build_member_response(user, member, role, ws_briefs))
         return responses
 
     async def get_member(self, org_id: uuid.UUID, member_id: uuid.UUID) -> MemberResponse:
@@ -93,29 +108,14 @@ class MemberService:
             raise NotFoundException("Member not found in this organization.")
         
         user, member, role = data
-        workspaces = await self.repo.get_user_workspace_assignments(org_id, user.user_id)
-        ws_briefs = [
-            WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
-            for w in workspaces
-        ]
-        
-        return MemberResponse(
-            user_id=user.user_id,
-            email=user.user_email,
-            first_name=user.user_first_name,
-            last_name=user.user_last_name,
-            phone=user.user_phone,
-            organization_member_id=member.organization_member_id,
-            status=member.organization_member_status,
-            role_id=role.role_id,
-            role_name=role.role_name,
-            workspaces=ws_briefs
-        )
+        ws_briefs = await self._get_workspace_briefs(org_id, user.user_id)
+        return self._build_member_response(user, member, role, ws_briefs)
 
-    async def create_member(self, org_id: uuid.UUID, payload: MemberCreateRequest) -> MemberResponse:
+    async def create_member(self, org_id: uuid.UUID, payload: MemberCreateRequest) -> MemberCreateResponse:
         """
         Atomically add a user to the organization.
         Creates a new user record with a temporary password if they don't exist globally.
+        If photo content_type and file_size are provided, generates an S3 upload URL.
         """
         # 1. Resolve or Create User
         user = await self.user_repo.get_by_email(payload.email)
@@ -172,28 +172,42 @@ class MemberService:
                 role = await self.db.get(Role, payload.role_id)
                 role_name = role.role_name if role else "Member"
 
-                workspaces = await self.repo.get_user_workspace_assignments(org_id, user.user_id)
-                ws_briefs = [
-                    WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
-                    for w in workspaces
-                ]
+                ws_briefs = await self._get_workspace_briefs(org_id, user.user_id)
 
                 # Note: In a production setup we would email the temporary password to the user.
                 # Since email isn't set up yet, we will log it / output it.
                 if is_new_user:
                     print(f"Generated temporary password for {payload.email}: {temp_pass}")
 
-                return MemberResponse(
+                # 5. Generate profile photo upload URL if photo info is provided
+                photo_upload_info: Optional[ProfilePhotoUploadInfo] = None
+                content_type = getattr(payload, "content_type", None)
+                file_size = getattr(payload, "file_size", None)
+                if content_type and file_size:
+                    upload_data = self.photo_service.request_upload(
+                        user_id=user.user_id,
+                        content_type=content_type,
+                        file_size=file_size,
+                    )
+                    photo_upload_info = ProfilePhotoUploadInfo(
+                        key=upload_data["key"],
+                        upload_url=upload_data["upload_url"],
+                        expires_in=upload_data["expires_in"],
+                    )
+
+                return MemberCreateResponse(
                     user_id=user.user_id,
                     email=user.user_email,
                     first_name=user.user_first_name,
                     last_name=user.user_last_name,
                     phone=user.user_phone,
+                    profile_image_url=self.photo_service.resolve_photo_url(user.user_profile_image),
                     organization_member_id=member.organization_member_id,
                     status=member.organization_member_status,
                     role_id=payload.role_id,
                     role_name=role_name,
-                    workspaces=ws_briefs
+                    workspaces=ws_briefs,
+                    profile_photo_upload=photo_upload_info,
                 )
         except Exception as e:
             raise e
@@ -232,24 +246,9 @@ class MemberService:
         # Reload updated fields
         role_new = await self.db.get(Role, payload.role_id)
         role_name = role_new.role_name if role_new else "Member"
-        workspaces = await self.repo.get_user_workspace_assignments(org_id, user.user_id)
-        ws_briefs = [
-            WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
-            for w in workspaces
-        ]
+        ws_briefs = await self._get_workspace_briefs(org_id, user.user_id)
 
-        return MemberResponse(
-            user_id=user.user_id,
-            email=user.user_email,
-            first_name=user.user_first_name,
-            last_name=user.user_last_name,
-            phone=user.user_phone,
-            organization_member_id=member.organization_member_id,
-            status=member.organization_member_status,
-            role_id=payload.role_id,
-            role_name=role_name,
-            workspaces=ws_briefs
-        )
+        return self._build_member_response(user, member, role_new, ws_briefs)
 
     async def update_member_status(
         self,
@@ -271,24 +270,8 @@ class MemberService:
         self.db.add(member)
         await self.db.flush()
 
-        workspaces = await self.repo.get_user_workspace_assignments(org_id, user.user_id)
-        ws_briefs = [
-            WorkspaceBrief(workspace_id=w.workspace_id, workspace_name=w.workspace_name)
-            for w in workspaces
-        ]
-
-        return MemberResponse(
-            user_id=user.user_id,
-            email=user.user_email,
-            first_name=user.user_first_name,
-            last_name=user.user_last_name,
-            phone=user.user_phone,
-            organization_member_id=member.organization_member_id,
-            status=member.organization_member_status,
-            role_id=role.role_id,
-            role_name=role.role_name,
-            workspaces=ws_briefs
-        )
+        ws_briefs = await self._get_workspace_briefs(org_id, user.user_id)
+        return self._build_member_response(user, member, role, ws_briefs)
 
     async def delete_member(self, org_id: uuid.UUID, member_id: uuid.UUID):
         """Soft-delete an organization member by deleting their membership rows (leaving User profile intact)."""
