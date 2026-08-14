@@ -5,7 +5,7 @@ from sqlalchemy import select, and_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
-from app.modules.assignments.models import Assignment, AssignmentStatus
+from app.modules.assignments.models import Assignment, AssignmentAttachment, AssignmentStatus
 from app.modules.subjects.models import Subject, SubjectTeacher
 from app.modules.organizations.models import (
     Workspace,
@@ -19,6 +19,8 @@ from app.modules.organizations.models import (
 class AssignmentRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    # ── Assignment CRUD ─────────────────────────────────────────
 
     async def create_assignment(
         self,
@@ -108,6 +110,53 @@ class AssignmentRepository:
         self.db.add(assignment)
         await self.db.flush()
         return assignment
+
+    # ── Assignment Attachments ──────────────────────────────────
+
+    async def create_attachment(
+        self,
+        attachment_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        s3_key: str,
+        original_filename: str,
+        content_type: str,
+        size: int,
+        created_by: Optional[uuid.UUID]
+    ) -> AssignmentAttachment:
+        attachment = AssignmentAttachment(
+            attachment_id=attachment_id,
+            attachment_assignment_id=assignment_id,
+            attachment_s3_key=s3_key,
+            attachment_original_filename=original_filename,
+            attachment_content_type=content_type,
+            attachment_size=size,
+            attachment_created_by=created_by
+        )
+        self.db.add(attachment)
+        try:
+            await self.db.flush()
+        except IntegrityError as e:
+            await self.db.rollback()
+            raise e
+        return attachment
+
+    async def get_attachment_by_id(self, attachment_id: uuid.UUID) -> Optional[AssignmentAttachment]:
+        stmt = select(AssignmentAttachment).where(AssignmentAttachment.attachment_id == attachment_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_attachments_by_assignment(self, assignment_id: uuid.UUID) -> List[AssignmentAttachment]:
+        stmt = (
+            select(AssignmentAttachment)
+            .where(AssignmentAttachment.attachment_assignment_id == assignment_id)
+            .order_by(AssignmentAttachment.attachment_created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def delete_attachment(self, attachment: AssignmentAttachment) -> None:
+        await self.db.delete(attachment)
+        await self.db.flush()
 
     # ── Hierarchy and Authorization Lookups ─────────────────────
 

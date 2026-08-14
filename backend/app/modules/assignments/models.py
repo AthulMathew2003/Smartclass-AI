@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from sqlalchemy import String, Text, DateTime, Numeric, Enum as SQLEnum, ForeignKey, UniqueConstraint
+from sqlalchemy import String, Text, DateTime, Numeric, BigInteger, Enum as SQLEnum, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base_class import Base
@@ -77,8 +77,54 @@ class Assignment(Base):
     )
 
     subject = relationship("Subject", back_populates="assignments")
+    attachments = relationship("AssignmentAttachment", back_populates="assignment", cascade="all, delete-orphan")
     submissions = relationship("AssignmentSubmission", back_populates="assignment", cascade="all, delete-orphan")
     creator = relationship("User", foreign_keys=[assignment_created_by], lazy="selectin")
+
+
+class AssignmentAttachment(Base):
+    __tablename__ = "tbl_assignment_attachments"
+
+    attachment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    attachment_assignment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tbl_assignments.assignment_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    attachment_s3_key: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+    attachment_original_filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )
+    attachment_content_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+    attachment_size: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False
+    )
+    attachment_created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tbl_users.user_id", ondelete="SET NULL"),
+        nullable=True
+    )
+    attachment_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    assignment = relationship("Assignment", back_populates="attachments")
+    creator = relationship("User", foreign_keys=[attachment_created_by], lazy="selectin")
 
 
 class AssignmentSubmission(Base):

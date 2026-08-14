@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -9,8 +9,14 @@ import {
   publishAssignment,
   closeAssignment,
   archiveAssignment,
+  fetchAssignmentAttachments,
+  requestAssignmentAttachmentUploadUrl,
+  confirmAssignmentAttachmentUpload,
+  getAssignmentAttachmentDownloadUrl,
+  deleteAssignmentAttachment,
   Assignment,
   AssignmentStatus,
+  AssignmentAttachment,
 } from "@/lib/assignments";
 import { fetchSubject, Subject } from "@/lib/subjects";
 import { usePermissions } from "@/lib/permissions";
@@ -29,6 +35,18 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 
+const ALLOWED_MIME_TYPES = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+];
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+
 export default function AssignmentDetailPage() {
   const { id: subjectId, assignmentId } = useParams() as {
     id: string;
@@ -42,6 +60,7 @@ export default function AssignmentDetailPage() {
 
   const [subject, setSubject] = useState<Subject | null>(null);
   const [assignment, setAssignment] = useState<Assignment | null>(null);
+  const [attachments, setAttachments] = useState<AssignmentAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isForbidden, setIsForbidden] = useState(false);
@@ -56,6 +75,18 @@ export default function AssignmentDetailPage() {
   // Archive Confirm Modal State
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  // Attachment Upload Modal State
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete Attachment Modal State
+  const [attachmentToDelete, setAttachmentToDelete] = useState<AssignmentAttachment | null>(null);
+  const [deleteAttachmentError, setDeleteAttachmentError] = useState<string | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [actionMessage, setActionMessage] = useState<{
@@ -83,6 +114,13 @@ export default function AssignmentDetailPage() {
 
       const assignData = await fetchAssignment(assignmentId, subjectId);
       setAssignment(assignData);
+
+      try {
+        const attList = await fetchAssignmentAttachments(assignmentId, subjectId);
+        setAttachments(attList);
+      } catch {
+        // Attachments fetch fails gracefully if not authorized or empty
+      }
     } catch (err: any) {
       const msg = err.message || "Failed to load assignment.";
       if (
@@ -195,6 +233,147 @@ export default function AssignmentDetailPage() {
     setEditDialogOpen(true);
   };
 
+  // ── Attachment Upload Handlers ─────────────────────────────────
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError(null);
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+        setUploadError("File size exceeds the 10 MB limit.");
+        setSelectedFile(null);
+        return;
+      }
+      if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+        setUploadError("File type is not supported. Please choose a PDF, Word document, Excel spreadsheet, or image.");
+        setSelectedFile(null);
+        return;
+      }
+      setSelectedFile(file);
+    }
+  };
+
+  const handleUploadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFile) {
+      setUploadError("Please select a file to upload.");
+      return;
+    }
+
+    setUploading(true);
+    setUploadError(null);
+    setUploadProgress(10);
+
+    try {
+      // 1. Request presigned upload URL
+      const { attachment_id, s3_key, upload_url } = await requestAssignmentAttachmentUploadUrl(
+        assignmentId,
+        subjectId,
+        {
+          filename: selectedFile.name,
+          content_type: selectedFile.type,
+          file_size: selectedFile.size,
+        }
+      );
+
+      setUploadProgress(40);
+
+      // 2. Direct browser upload to S3 using presigned PUT URL
+      const s3Response = await fetch(upload_url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": selectedFile.type,
+        },
+        body: selectedFile,
+      });
+
+      if (!s3Response.ok) {
+        throw new Error("Failed to upload file directly to storage.");
+      }
+
+      setUploadProgress(80);
+
+      // 3. Confirm upload with backend
+      await confirmAssignmentAttachmentUpload(assignmentId, subjectId, {
+        attachment_id,
+        s3_key,
+        original_filename: selectedFile.name,
+        content_type: selectedFile.type,
+        file_size: selectedFile.size,
+      });
+
+      setUploadProgress(100);
+
+      // 4. Refresh attachment list
+      const updatedList = await fetchAssignmentAttachments(assignmentId, subjectId);
+      setAttachments(updatedList);
+
+      setUploadOpen(false);
+      setSelectedFile(null);
+      setActionMessage({ type: "success", text: "Attachment uploaded successfully." });
+    } catch (err: any) {
+      setUploadError(err.message || "Failed to upload attachment.");
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleDownloadAttachment = async (attachment: AssignmentAttachment) => {
+    try {
+      const { download_url } = await getAssignmentAttachmentDownloadUrl(
+        assignmentId,
+        attachment.attachment_id,
+        subjectId
+      );
+      window.open(download_url, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      setActionMessage({
+        type: "error",
+        text: err.message || "Failed to generate download link.",
+      });
+    }
+  };
+
+  const handleDeleteAttachmentSubmit = async () => {
+    if (!attachmentToDelete) return;
+    setSubmitting(true);
+    setDeleteAttachmentError(null);
+
+    try {
+      await deleteAssignmentAttachment(
+        assignmentId,
+        attachmentToDelete.attachment_id,
+        subjectId
+      );
+      setAttachments((prev) =>
+        prev.filter((a) => a.attachment_id !== attachmentToDelete.attachment_id)
+      );
+      setAttachmentToDelete(null);
+      setActionMessage({ type: "success", text: "Attachment deleted." });
+    } catch (err: any) {
+      setDeleteAttachmentError(err.message || "Failed to delete attachment.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getFileIcon = (contentType: string) => {
+    if (contentType.includes("pdf")) return "picture_as_pdf";
+    if (contentType.includes("image")) return "image";
+    if (contentType.includes("spreadsheet") || contentType.includes("excel"))
+      return "table_chart";
+    if (contentType.includes("word") || contentType.includes("document"))
+      return "description";
+    return "attach_file";
+  };
+
   if (!permLoaded || loading) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
@@ -238,6 +417,7 @@ export default function AssignmentDetailPage() {
   const isDraft = assignment.assignment_status === "draft";
   const isPublished = assignment.assignment_status === "published";
   const isClosed = assignment.assignment_status === "closed";
+  const canManageAttachments = canUpdate && !isArchived && !isClosed;
 
   const getStatusBadge = (status: AssignmentStatus) => {
     switch (status) {
@@ -425,7 +605,7 @@ export default function AssignmentDetailPage() {
       {/* Main Content Area: Instructions & Description */}
       <div className="space-y-3">
         <h2 className="text-xl font-bold text-[var(--on-surface)]">Instructions & Description</h2>
-        <div className="p-6 rounded-2xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] min-h-[140px]">
+        <div className="p-6 rounded-2xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] min-h-[120px]">
           {assignment.assignment_description ? (
             <div className="text-[var(--on-surface)] leading-relaxed whitespace-pre-wrap text-sm sm:text-base">
               {assignment.assignment_description}
@@ -438,7 +618,105 @@ export default function AssignmentDetailPage() {
         </div>
       </div>
 
-      {/* Submissions Section Placeholder (Foundation for Step 10.3) */}
+      {/* Attachments Section (Step 10.3A) */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-[var(--on-surface)]">Attachments</h2>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]">
+              {attachments.length}
+            </span>
+          </div>
+
+          {canManageAttachments && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setSelectedFile(null);
+                setUploadError(null);
+                setUploadOpen(true);
+              }}
+              className="bg-[var(--primary)] text-[var(--on-primary)]"
+            >
+              <span className="material-symbols-outlined mr-1.5 text-[18px]">upload</span>
+              Add Attachment
+            </Button>
+          )}
+        </div>
+
+        {attachments.length === 0 ? (
+          <div className="p-6 rounded-2xl border border-dashed border-[var(--outline-variant)] bg-[var(--surface-container-lowest)] text-center space-y-2">
+            <span className="material-symbols-outlined text-[28px] text-[var(--on-surface-variant)]">
+              attach_file
+            </span>
+            <p className="text-sm text-[var(--on-surface-variant)]">
+              {canManageAttachments
+                ? "No attachments yet. You can attach PDFs, documents, spreadsheets, or images (up to 10 MB each)."
+                : "No attachments provided for this assignment."}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {attachments.map((att) => (
+              <div
+                key={att.attachment_id}
+                className="p-4 rounded-xl border border-[var(--outline-variant)] bg-[var(--surface-container-lowest)] flex items-center justify-between gap-3 group hover:border-[var(--primary)] transition-all"
+              >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-10 h-10 rounded-lg bg-[var(--surface-container-high)] flex items-center justify-center text-[var(--primary)] shrink-0">
+                    <span className="material-symbols-outlined text-[22px]">
+                      {getFileIcon(att.content_type)}
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="text-sm font-semibold text-[var(--on-surface)] truncate"
+                      title={att.original_filename}
+                    >
+                      {att.original_filename}
+                    </div>
+                    <div className="text-xs text-[var(--on-surface-variant)] flex items-center gap-2 mt-0.5">
+                      <span>{formatFileSize(att.size)}</span>
+                      <span>&bull;</span>
+                      <span>{new Date(att.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDownloadAttachment(att)}
+                    title="Download attachment"
+                    className="h-8 px-2.5 text-xs"
+                  >
+                    <span className="material-symbols-outlined mr-1 text-[16px]">download</span>
+                    Download
+                  </Button>
+
+                  {canManageAttachments && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        setAttachmentToDelete(att);
+                        setDeleteAttachmentError(null);
+                      }}
+                      title="Delete attachment"
+                      className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Submissions Section Placeholder (Foundation for Step 10.3B) */}
       <div className="space-y-3 pt-4 border-t border-[var(--outline-variant)]">
         <h2 className="text-xl font-bold text-[var(--on-surface)]">Submissions & Grading</h2>
         <div className="p-6 rounded-2xl border border-dashed border-[var(--outline-variant)] bg-[var(--surface-container-lowest)] text-center space-y-2">
@@ -453,7 +731,7 @@ export default function AssignmentDetailPage() {
               : "Submissions will open when published"}
           </h3>
           <p className="text-xs text-[var(--on-surface-variant)] max-w-md mx-auto">
-            Student assignment submission and assessment workflows will be enabled in Step 10.3.
+            Student assignment submission and assessment workflows will be enabled in Step 10.3B.
           </p>
         </div>
       </div>
@@ -524,6 +802,124 @@ export default function AssignmentDetailPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Upload Attachment Modal */}
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Add Attachment</DialogTitle>
+            <DialogDescription>
+              Upload supplementary materials (PDF, Word, Excel, or Images up to 10 MB).
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleUploadSubmit} className="space-y-4 py-3">
+            {uploadError && (
+              <div className="p-3 text-sm text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg">
+                {uploadError}
+              </div>
+            )}
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="p-6 rounded-2xl border-2 border-dashed border-[var(--outline-variant)] hover:border-[var(--primary)] transition-colors cursor-pointer text-center space-y-2 bg-[var(--surface-container-lowest)]"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx"
+                onChange={handleFileChange}
+              />
+              <span className="material-symbols-outlined text-[32px] text-[var(--primary)]">
+                cloud_upload
+              </span>
+              <div className="text-sm font-semibold text-[var(--on-surface)]">
+                {selectedFile ? selectedFile.name : "Click to select a file"}
+              </div>
+              <p className="text-xs text-[var(--on-surface-variant)]">
+                {selectedFile
+                  ? `${formatFileSize(selectedFile.size)} · ${selectedFile.type || "file"}`
+                  : "PDF, DOCX, XLSX, PNG, JPG up to 10 MB"}
+              </p>
+            </div>
+
+            {uploading && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs text-[var(--on-surface-variant)] font-medium">
+                  <span>Uploading directly to storage...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-[var(--surface-container-high)] overflow-hidden">
+                  <div
+                    className="h-full bg-[var(--primary)] transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <DialogFooter className="pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setUploadOpen(false)}
+                disabled={uploading}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={!selectedFile || uploading}
+                className="bg-[var(--primary)] text-[var(--on-primary)]"
+              >
+                {uploading ? "Uploading..." : "Upload Attachment"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Attachment Confirmation Modal */}
+      <Dialog
+        open={!!attachmentToDelete}
+        onOpenChange={(open) => !open && setAttachmentToDelete(null)}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Delete Attachment</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &quot;
+              {attachmentToDelete?.original_filename}&quot;? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteAttachmentError && (
+            <div className="p-3 text-sm text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg">
+              {deleteAttachmentError}
+            </div>
+          )}
+
+          <DialogFooter className="pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAttachmentToDelete(null)}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDeleteAttachmentSubmit}
+              disabled={submitting}
+            >
+              {submitting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

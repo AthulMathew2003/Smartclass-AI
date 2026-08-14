@@ -27,6 +27,30 @@ export interface AssignmentUpdateInput {
   due_at?: string;
 }
 
+export interface AssignmentAttachment {
+  attachment_id: string;
+  assignment_id: string;
+  original_filename: string;
+  content_type: string;
+  size: number;
+  created_by?: string | null;
+  created_at: string;
+}
+
+export interface AttachmentUploadUrlResponse {
+  attachment_id: string;
+  s3_key: string;
+  upload_url: string;
+  expires_in: number;
+}
+
+export interface AttachmentDownloadUrlResponse {
+  attachment_id: string;
+  original_filename: string;
+  download_url: string;
+  expires_in: number;
+}
+
 export async function fetchAssignments(
   subjectId: string,
   status?: AssignmentStatus | "all"
@@ -109,6 +133,78 @@ export async function archiveAssignment(
 ): Promise<Assignment> {
   return await apiFetch<Assignment>(
     `/assignments/${encodeURIComponent(assignmentId)}?subject_id=${encodeURIComponent(subjectId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+// ── Assignment Attachments (Step 10.3A) ──────────────────────────
+
+export async function requestAssignmentAttachmentUploadUrl(
+  assignmentId: string,
+  subjectId: string,
+  data: {
+    filename: string;
+    content_type: string;
+    file_size: number;
+  }
+): Promise<AttachmentUploadUrlResponse> {
+  return await apiFetch<AttachmentUploadUrlResponse>(
+    `/assignments/${encodeURIComponent(assignmentId)}/attachments/upload-url?subject_id=${encodeURIComponent(subjectId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+}
+
+export async function confirmAssignmentAttachmentUpload(
+  assignmentId: string,
+  subjectId: string,
+  data: {
+    attachment_id: string;
+    s3_key: string;
+    original_filename: string;
+    content_type: string;
+    file_size: number;
+  }
+): Promise<AssignmentAttachment> {
+  return await apiFetch<AssignmentAttachment>(
+    `/assignments/${encodeURIComponent(assignmentId)}/attachments/confirm?subject_id=${encodeURIComponent(subjectId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+}
+
+export async function fetchAssignmentAttachments(
+  assignmentId: string,
+  subjectId: string
+): Promise<AssignmentAttachment[]> {
+  return await apiFetch<AssignmentAttachment[]>(
+    `/assignments/${encodeURIComponent(assignmentId)}/attachments?subject_id=${encodeURIComponent(subjectId)}`
+  );
+}
+
+export async function getAssignmentAttachmentDownloadUrl(
+  assignmentId: string,
+  attachmentId: string,
+  subjectId: string
+): Promise<AttachmentDownloadUrlResponse> {
+  return await apiFetch<AttachmentDownloadUrlResponse>(
+    `/assignments/${encodeURIComponent(assignmentId)}/attachments/${encodeURIComponent(attachmentId)}/download-url?subject_id=${encodeURIComponent(subjectId)}`
+  );
+}
+
+export async function deleteAssignmentAttachment(
+  assignmentId: string,
+  attachmentId: string,
+  subjectId: string
+): Promise<void> {
+  await apiFetch<void>(
+    `/assignments/${encodeURIComponent(assignmentId)}/attachments/${encodeURIComponent(attachmentId)}?subject_id=${encodeURIComponent(subjectId)}`,
     {
       method: "DELETE",
     }

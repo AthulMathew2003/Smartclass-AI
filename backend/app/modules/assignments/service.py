@@ -2,22 +2,34 @@ import uuid
 from typing import List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.assignments.models import Assignment, AssignmentStatus
+from app.core.storage import S3StorageService
+from app.modules.assignments.models import Assignment, AssignmentAttachment, AssignmentStatus
 from app.modules.assignments.repository import AssignmentRepository
 from app.modules.assignments.schemas import (
     AssignmentCreateRequest,
     AssignmentUpdateRequest,
-    AssignmentResponse
+    AssignmentResponse,
+    AttachmentUploadUrlRequest,
+    AttachmentUploadUrlResponse,
+    AttachmentConfirmRequest,
+    AttachmentResponse,
+    AttachmentDownloadUrlResponse
+)
+from app.modules.assignments.attachments import (
+    validate_attachment_request,
+    sanitize_filename,
+    generate_attachment_s3_key
 )
 from app.modules.subjects.models import Subject, SubjectStatus
 from app.modules.organizations.models import Workspace, WorkspaceStatus
-from app.core.exceptions import ConflictException, NotFoundException, ForbiddenException
+from app.core.exceptions import ConflictException, NotFoundException, ForbiddenException, StorageException, ValidationException
 
 
 class AssignmentService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, storage: Optional[S3StorageService] = None):
         self.db = db
         self.repo = AssignmentRepository(db)
+        self.storage = storage or S3StorageService()
 
     # ── Hierarchy and Context Verification ──────────────────────
 
@@ -301,3 +313,213 @@ class AssignmentService:
 
         archived = await self.repo.archive_assignment(assignment)
         return AssignmentResponse.model_validate(archived)
+
+    # ── Assignment Attachment Operations (Step 10.3A) ───────────
+
+    async def request_attachment_upload_url(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        payload: AttachmentUploadUrlRequest,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AttachmentUploadUrlResponse:
+        """
+        Validate attachment parameters, verify permissions, and generate a presigned PUT URL.
+        """
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
+            raise ConflictException("Archived assignments cannot have attachments added.")
+
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Closed assignments cannot have attachments added.")
+
+        # Validate request
+        validate_attachment_request(payload.content_type, payload.file_size, payload.filename)
+
+        attachment_id = uuid.uuid4()
+        s3_key = generate_attachment_s3_key(assignment.assignment_id, attachment_id, payload.content_type)
+        upload_url = self.storage.generate_upload_url(
+            key=s3_key,
+            content_type=payload.content_type.strip(),
+            expires_in=900
+        )
+
+        return AttachmentUploadUrlResponse(
+            attachment_id=attachment_id,
+            s3_key=s3_key,
+            upload_url=upload_url,
+            expires_in=900
+        )
+
+    async def confirm_attachment_upload(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        payload: AttachmentConfirmRequest,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AttachmentResponse:
+        """
+        Verify the uploaded object in S3 and save the attachment metadata in PostgreSQL.
+        """
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status in (AssignmentStatus.ARCHIVED, AssignmentStatus.CLOSED):
+            raise ConflictException("Cannot add attachments to closed or archived assignments.")
+
+        expected_prefix = f"assignments/{assignment.assignment_id}/attachments/"
+        if not payload.s3_key.startswith(expected_prefix):
+            raise ValidationException("Invalid S3 key for this assignment.")
+
+        validate_attachment_request(payload.content_type, payload.file_size, payload.original_filename)
+        clean_filename = sanitize_filename(payload.original_filename)
+
+        # Verify object exists in S3
+        if not self.storage.object_exists(payload.s3_key):
+            raise StorageException("Attachment file not found in storage. Upload may have failed or expired.")
+
+        attachment = await self.repo.create_attachment(
+            attachment_id=payload.attachment_id,
+            assignment_id=assignment.assignment_id,
+            s3_key=payload.s3_key,
+            original_filename=clean_filename,
+            content_type=payload.content_type.strip(),
+            size=payload.file_size,
+            created_by=requesting_user_id
+        )
+        return AttachmentResponse.model_validate(attachment)
+
+    async def list_attachments(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> List[AttachmentResponse]:
+        """
+        List attachments for an assignment.
+        - Students can only view attachments for published or closed assignments.
+        """
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
+            raise NotFoundException("Assignment not found.")
+
+        attachments = await self.repo.list_attachments_by_assignment(assignment.assignment_id)
+        return [AttachmentResponse.model_validate(a) for a in attachments]
+
+    async def get_attachment_download_url(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        attachment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AttachmentDownloadUrlResponse:
+        """
+        Generate a short-lived presigned GET URL for downloading an attachment.
+        """
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
+            raise NotFoundException("Assignment not found.")
+
+        attachment = await self.repo.get_attachment_by_id(attachment_id)
+        if not attachment or attachment.attachment_assignment_id != assignment.assignment_id:
+            raise NotFoundException("Attachment not found.")
+
+        download_url = self.storage.generate_download_url(
+            key=attachment.attachment_s3_key,
+            expires_in=900
+        )
+
+        return AttachmentDownloadUrlResponse(
+            attachment_id=attachment.attachment_id,
+            original_filename=attachment.attachment_original_filename,
+            download_url=download_url,
+            expires_in=900
+        )
+
+    async def delete_attachment(
+        self,
+        org_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        attachment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> None:
+        """
+        Delete an attachment (S3 object and database metadata).
+        """
+        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment or assignment.assignment_subject_id != subject.subject_id:
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
+            raise ConflictException("Archived assignments cannot be modified.")
+
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Closed assignments cannot have attachments deleted.")
+
+        attachment = await self.repo.get_attachment_by_id(attachment_id)
+        if not attachment or attachment.attachment_assignment_id != assignment.assignment_id:
+            raise NotFoundException("Attachment not found.")
+
+        # Delete S3 object safely
+        try:
+            self.storage.delete_object(attachment.attachment_s3_key)
+        except Exception:
+            # Continue removing from DB if S3 deletion fails or already deleted
+            pass
+
+        await self.repo.delete_attachment(attachment)
