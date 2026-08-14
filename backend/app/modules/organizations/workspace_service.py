@@ -22,6 +22,7 @@ class WorkspaceService:
         responses = []
         for ws in workspaces:
             m_count = await self.repo.count_workspace_members(ws.workspace_id)
+            c_count = await self.repo.count_workspace_subjects(ws.workspace_id)
             responses.append(
                 WorkspaceResponse(
                     workspace_id=ws.workspace_id,
@@ -33,7 +34,8 @@ class WorkspaceService:
                     workspace_created_by=ws.workspace_created_by,
                     workspace_created_at=ws.workspace_created_at,
                     workspace_updated_at=ws.workspace_updated_at,
-                    member_count=m_count
+                    member_count=m_count,
+                    subject_count=c_count
                 )
             )
         return responses
@@ -45,6 +47,7 @@ class WorkspaceService:
             raise ForbiddenException("Access denied to this workspace.")
 
         m_count = await self.repo.count_workspace_members(ws.workspace_id)
+        c_count = await self.repo.count_workspace_subjects(ws.workspace_id)
         return WorkspaceResponse(
             workspace_id=ws.workspace_id,
             workspace_organization_id=ws.workspace_organization_id,
@@ -55,7 +58,8 @@ class WorkspaceService:
             workspace_created_by=ws.workspace_created_by,
             workspace_created_at=ws.workspace_created_at,
             workspace_updated_at=ws.workspace_updated_at,
-            member_count=m_count
+            member_count=m_count,
+            subject_count=c_count
         )
 
     async def create_workspace(
@@ -85,7 +89,8 @@ class WorkspaceService:
             workspace_created_by=ws.workspace_created_by,
             workspace_created_at=ws.workspace_created_at,
             workspace_updated_at=ws.workspace_updated_at,
-            member_count=0
+            member_count=0,
+            subject_count=0
         )
 
     async def update_workspace(
@@ -111,6 +116,7 @@ class WorkspaceService:
         )
 
         m_count = await self.repo.count_workspace_members(updated_ws.workspace_id)
+        c_count = await self.repo.count_workspace_subjects(updated_ws.workspace_id)
         return WorkspaceResponse(
             workspace_id=updated_ws.workspace_id,
             workspace_organization_id=updated_ws.workspace_organization_id,
@@ -121,7 +127,8 @@ class WorkspaceService:
             workspace_created_by=updated_ws.workspace_created_by,
             workspace_created_at=updated_ws.workspace_created_at,
             workspace_updated_at=updated_ws.workspace_updated_at,
-            member_count=m_count
+            member_count=m_count,
+            subject_count=c_count
         )
 
     async def archive_workspace(self, workspace_id: uuid.UUID, org_id: uuid.UUID) -> WorkspaceResponse:
@@ -136,6 +143,7 @@ class WorkspaceService:
         )
 
         m_count = await self.repo.count_workspace_members(archived_ws.workspace_id)
+        c_count = await self.repo.count_workspace_subjects(archived_ws.workspace_id)
         return WorkspaceResponse(
             workspace_id=archived_ws.workspace_id,
             workspace_organization_id=archived_ws.workspace_organization_id,
@@ -146,7 +154,8 @@ class WorkspaceService:
             workspace_created_by=archived_ws.workspace_created_by,
             workspace_created_at=archived_ws.workspace_created_at,
             workspace_updated_at=archived_ws.workspace_updated_at,
-            member_count=m_count
+            member_count=m_count,
+            subject_count=c_count
         )
 
     async def list_workspace_members(self, workspace_id: uuid.UUID, org_id: uuid.UUID):

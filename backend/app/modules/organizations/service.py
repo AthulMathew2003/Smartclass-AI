@@ -43,6 +43,11 @@ class OrganizationService:
         if res.scalars().first():
             raise ConflictException("User already owns an organization.")
 
+        # 3. Check if user already has active memberships in any organization
+        memberships = await self.repo.list_memberships(user.user_id)
+        if memberships:
+            raise ConflictException("User already belongs to an organization.")
+
         try:
             # Wrap all operations inside a sub-transaction (savepoint)
             async with self.db.begin_nested():

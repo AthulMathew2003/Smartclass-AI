@@ -10,3 +10,4 @@ from app.modules.organizations.models import (  # noqa: F401
     WorkspaceMember
 )
 from app.modules.rbac.models import Permission, RolePermission  # noqa: F401
+from app.modules.subjects.models import Subject, SubjectTeacher  # noqa: F401

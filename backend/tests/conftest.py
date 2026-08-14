@@ -10,9 +10,18 @@ from app.main import app
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
+from sqlalchemy import event
+
 @pytest.fixture
 async def test_engine():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
@@ -54,8 +63,12 @@ async def test_engine():
             ("workspace.update", "Edit workspaces"),
             ("workspace.delete", "Delete workspaces"),
             ("organization.update", "Update organization settings"),
-            ("classroom.create", "Create classrooms"),
-            ("classroom.update", "Update classrooms"),
+            ("subject.create", "Create subjects"),
+            ("subject.read", "View subjects"),
+            ("subject.update", "Update subjects"),
+            ("subject.delete", "Archive subjects"),
+            ("subject.teacher.add", "Add teachers to subjects"),
+            ("subject.teacher.remove", "Remove teachers from subjects"),
             ("assignment.create", "Create assignments"),
             ("assignment.update", "Update assignments"),
             ("assignment.grade", "Grade student assignments"),
@@ -63,9 +76,9 @@ async def test_engine():
             ("attendance.manage", "Take or update attendance"),
             ("exam.create", "Create exams"),
             ("exam.publish", "Publish exams"),
-            ("analytics.view", "View classroom analytics"),
+            ("analytics.view", "View analytics"),
             ("ai.use", "Use AI tutor features"),
-            ("settings.manage", "Manage classroom settings")
+            ("settings.manage", "Manage settings")
         ]
         db_perms = {}
         for name, desc in all_permissions:
@@ -84,16 +97,18 @@ async def test_engine():
             "Admin": [
                 "member.create", "member.read", "member.update", "member.delete",
                 "workspace.create", "workspace.read", "workspace.update", "workspace.delete",
-                "classroom.create", "classroom.update", "assignment.create", "assignment.update",
+                "subject.create", "subject.read", "subject.update", "subject.delete",
+                "subject.teacher.add", "subject.teacher.remove", "assignment.create", "assignment.update",
                 "attendance.view", "attendance.manage", "analytics.view"
             ],
             "Teacher": [
-                "workspace.read", "classroom.create", "classroom.update",
+                "workspace.read", "subject.create", "subject.read", "subject.update",
+                "subject.teacher.add", "subject.teacher.remove",
                 "assignment.create", "assignment.update", "assignment.grade",
                 "attendance.view", "attendance.manage", "analytics.view", "ai.use"
             ],
             "Student": [
-                "workspace.read", "attendance.view", "ai.use"
+                "workspace.read", "subject.read", "attendance.view", "ai.use"
             ],
             "Parent": [
                 "workspace.read", "attendance.view"

@@ -5,7 +5,7 @@ import os
 components = [
     "button", "input", "label", "select", "dialog", "dropdown-menu", 
     "table", "badge", "avatar", "card", "form", "textarea", "checkbox", 
-    "separator", "sheet", "tooltip"
+    "separator", "sheet", "tooltip", "tabs"
 ]
 
 base_url = "https://ui.shadcn.com/registry/styles/new-york/"

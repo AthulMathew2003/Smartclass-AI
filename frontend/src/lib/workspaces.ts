@@ -11,6 +11,7 @@ export interface Workspace {
   workspace_created_at: string;
   workspace_updated_at: string;
   member_count?: number;
+  subject_count?: number;
 }
 
 export interface WorkspaceMemberItem {

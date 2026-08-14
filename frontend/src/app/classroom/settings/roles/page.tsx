@@ -39,8 +39,8 @@ const PERMISSION_LABELS: Record<string, string> = {
   "workspace.update": "Edit Workspaces",
   "workspace.delete": "Delete Workspaces",
   "organization.update": "Update Organization",
-  "classroom.create": "Create Classrooms",
-  "classroom.update": "Update Classrooms",
+  "subject.create": "Create Subjects",
+  "subject.update": "Update Subjects",
   "assignment.create": "Create Assignments",
   "assignment.update": "Update Assignments",
   "assignment.grade": "Grade Assignments",
@@ -91,6 +91,12 @@ export default function CustomRolesPage() {
   const [selectedPermIds, setSelectedPermIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [expandedRoles, setExpandedRoles] = useState<Record<string, boolean>>({});
+
+  const toggleExpand = (roleId: string) => {
+    setExpandedRoles(prev => ({ ...prev, [roleId]: !prev[roleId] }));
+  };
 
   // ── Load Roles & Permissions ─────────────────────────────
   const loadData = useCallback(async () => {
@@ -381,16 +387,19 @@ export default function CustomRolesPage() {
 
                       <div className="space-y-2">
                         <span className="ds-section-label">Permissions ({role.permissions.length})</span>
-                        <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                          {role.permissions.slice(0, 5).map(p => (
+                        <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
+                          {(expandedRoles[role.role_id] ? role.permissions : role.permissions.slice(0, 5)).map(p => (
                             <span key={p.permission_id} className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[var(--surface-container-high)] text-[var(--on-surface)]">
                               {PERMISSION_LABELS[p.permission_name] || p.permission_name}
                             </span>
                           ))}
                           {role.permissions.length > 5 && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[var(--surface-container-highest)] text-[var(--primary)]">
-                              +{role.permissions.length - 5} more
-                            </span>
+                            <button 
+                              onClick={() => toggleExpand(role.role_id)}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-[var(--surface-container-highest)] text-[var(--primary)] cursor-pointer hover:bg-[var(--primary)] hover:text-white transition-colors"
+                            >
+                              {expandedRoles[role.role_id] ? "Show less" : `+${role.permissions.length - 5} more`}
+                            </button>
                           )}
                         </div>
                       </div>
@@ -456,16 +465,19 @@ export default function CustomRolesPage() {
 
                         <div className="space-y-2">
                           <span className="ds-section-label">Permissions ({role.permissions.length})</span>
-                          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                            {role.permissions.slice(0, 5).map(p => (
+                          <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
+                            {(expandedRoles[role.role_id] ? role.permissions : role.permissions.slice(0, 5)).map(p => (
                               <span key={p.permission_id} className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[var(--surface-container-high)] text-[var(--on-surface)]">
                                 {PERMISSION_LABELS[p.permission_name] || p.permission_name}
                               </span>
                             ))}
                             {role.permissions.length > 5 && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[var(--surface-container-highest)] text-[var(--primary)]">
-                                +{role.permissions.length - 5} more
-                              </span>
+                              <button 
+                                onClick={() => toggleExpand(role.role_id)}
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-[var(--surface-container-highest)] text-[var(--primary)] cursor-pointer hover:bg-[var(--primary)] hover:text-white transition-colors"
+                              >
+                                {expandedRoles[role.role_id] ? "Show less" : `+${role.permissions.length - 5} more`}
+                              </button>
                             )}
                           </div>
                         </div>

@@ -322,6 +322,16 @@ class OrganizationRepository:
         result = await self.db.execute(stmt)
         return len(result.scalars().all())
 
+    async def count_workspace_subjects(self, workspace_id: uuid.UUID) -> int:
+        """Count total active subjects in a workspace."""
+        from app.modules.subjects.models import Subject, SubjectStatus
+        stmt = select(Subject).where(
+            Subject.subject_workspace_id == workspace_id,
+            Subject.subject_status == SubjectStatus.ACTIVE
+        )
+        result = await self.db.execute(stmt)
+        return len(result.scalars().all())
+
     async def update_workspace(
         self,
         workspace: Workspace,

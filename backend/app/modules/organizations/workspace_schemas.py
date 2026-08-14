@@ -29,3 +29,4 @@ class WorkspaceResponse(BaseModel):
     workspace_created_at: datetime
     workspace_updated_at: datetime
     member_count: int = 0
+    subject_count: int = 0

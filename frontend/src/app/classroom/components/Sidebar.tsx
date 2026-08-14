@@ -17,6 +17,7 @@ import { usePermissions } from "../../../lib/permissions";
 const NAV_CONFIG = [
   { name: "Dashboard",           href: "/classroom",               icon: "dashboard",            permission: null },
   { name: "Workspaces",          href: "/classroom/workspaces",     icon: "workspaces",           permission: "workspace.read" },
+  { name: "Subjects",            href: "/classroom/subjects",       icon: "menu_book",            permission: "subject.read" },
   { name: "Members",             href: "/classroom/members",        icon: "group",                permission: "member.read" },
   { name: "Roles & Permissions", href: "/classroom/settings/roles", icon: "admin_panel_settings", permission: "member.update" },
   { name: "Analytics",           href: "/classroom/analytics",      icon: "analytics",            permission: "analytics.view" },
@@ -140,8 +141,8 @@ export default function Sidebar({ status }: { status: OnboardingStatusResponse |
         })}
       </nav>
 
-      {/* Footer CTA — only show for users with classroom.create permission */}
-      {!collapsed && hasPermission("classroom.create") && (
+      {/* Footer CTA — only show for users with subject.create permission */}
+      {!collapsed && hasPermission("subject.create") && (
         <div className="px-4 pb-6 mt-auto space-y-3">
           <button
             className="w-full py-3 rounded-full font-bold text-sm transition-all hover:scale-95"
@@ -168,8 +169,8 @@ export default function Sidebar({ status }: { status: OnboardingStatusResponse |
         </div>
       )}
 
-      {/* Footer status for users without classroom.create */}
-      {!collapsed && !hasPermission("classroom.create") && (
+      {/* Footer status for users without subject.create */}
+      {!collapsed && !hasPermission("subject.create") && (
         <div className="px-4 pb-6 mt-auto">
           <div
             className="flex items-center justify-between pt-3 border-t"

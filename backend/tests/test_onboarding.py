@@ -253,3 +253,53 @@ async def test_organization_status_endpoint_scoping(client: AsyncClient, db_sess
     status_res = await client.get("/api/v1/organizations/status", headers=headers_member)
     assert status_res.status_code == 200
     assert status_res.json()["has_organization"] is False
+
+
+@pytest.mark.asyncio
+async def test_member_cannot_onboard_new_organization(client: AsyncClient, db_session):
+    from app.modules.organizations.member_service import MemberService
+    from app.modules.organizations.repository import OrganizationRepository
+
+    user_service = UserService(db_session)
+    owner = await user_service.create_user(email="member_onboard_owner@example.com", password="Password123!")
+    member_user = await user_service.create_user(email="member_trying_onboard@example.com", password="Password123!")
+    await db_session.commit()
+
+    # Owner onboards Org A
+    login_owner = await client.post("/api/v1/auth/login", json={"email": "member_onboard_owner@example.com", "password": "Password123!"})
+    token_owner = login_owner.json()["access_token"]
+    headers_owner = {"Authorization": f"Bearer {token_owner}"}
+    payload_a = {
+        "org_name": "Org A", "org_slug": "org-a", "org_type": "School", "org_country": "USA", "org_state": "CA", "org_city": "LA", "org_timezone": "America/Los_Angeles", "owner_first_name": "Owner", "owner_last_name": "A", "owner_phone": "1", "workspace_name": "WS A"
+    }
+    await client.post("/api/v1/organizations/onboarding", json=payload_a, headers=headers_owner)
+    await db_session.commit()
+
+    org_a = (await db_session.execute(select(Organization).where(Organization.organization_slug == "org-a"))).scalars().first()
+
+    # Add member_user to Org A
+    repo = OrganizationRepository(db_session)
+    role = (await repo.get_roles(org_a.organization_id))[0]
+    member_service = MemberService(db_session)
+    from app.modules.organizations.member_schemas import MemberCreateRequest
+    await member_service.create_member(org_a.organization_id, MemberCreateRequest(email="member_trying_onboard@example.com", first_name="M", last_name="U", role_id=role.role_id, workspace_ids=[]))
+    await db_session.commit()
+
+    # Log in member_user
+    login_member = await client.post("/api/v1/auth/login", json={"email": "member_trying_onboard@example.com", "password": "Password123!"})
+    token_member = login_member.json()["access_token"]
+    headers_member = {"Authorization": f"Bearer {token_member}"}
+
+    # Member attempts to onboard Org B by directly hitting the API
+    payload_b = {
+        "org_name": "Org B", "org_slug": "org-b", "org_type": "School", "org_country": "USA", "org_state": "CA", "org_city": "LA", "org_timezone": "America/Los_Angeles", "owner_first_name": "Member", "owner_last_name": "B", "owner_phone": "1", "workspace_name": "WS B"
+    }
+    res = await client.post("/api/v1/organizations/onboarding", json=payload_b, headers=headers_member)
+    
+    # Should return 409 Conflict because user already belongs to an organization
+    assert res.status_code == 409
+    
+    # Verify organization B was not created
+    org_b = (await db_session.execute(select(Organization).where(Organization.organization_slug == "org-b"))).scalars().first()
+    assert org_b is None
+

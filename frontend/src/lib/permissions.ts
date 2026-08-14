@@ -7,7 +7,7 @@
  * Frontend permission checks are for UX only — backend always enforces via require_permission().
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "./api";
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -186,12 +186,16 @@ export function usePermissions() {
     return unsubscribe;
   }, []);
 
+  const checkHasPermission = useCallback((permission: string) => permissions.includes(permission), [permissions]);
+  const checkHasAnyPermission = useCallback((pList: string[]) => pList.some((p) => permissions.includes(p)), [permissions]);
+  const checkHasAllPermissions = useCallback((pList: string[]) => pList.every((p) => permissions.includes(p)), [permissions]);
+
   return {
     permissions,
     isLoaded: loaded,
     orgId,
-    hasPermission: (permission: string) => permissions.includes(permission),
-    hasAnyPermission: (pList: string[]) => pList.some((p) => permissions.includes(p)),
-    hasAllPermissions: (pList: string[]) => pList.every((p) => permissions.includes(p)),
+    hasPermission: checkHasPermission,
+    hasAnyPermission: checkHasAnyPermission,
+    hasAllPermissions: checkHasAllPermissions,
   };
 }

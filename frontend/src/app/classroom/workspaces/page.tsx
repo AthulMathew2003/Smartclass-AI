@@ -384,7 +384,7 @@ export default function WorkspacesPage() {
               {search || statusFilter !== "all"
                 ? "Try adjusting your search criteria or status filter."
                 : canCreate
-                ? "Create your first workspace to organize members, classrooms, and learning resources."
+                ? "Create your first workspace to organize members, subjects, and learning resources."
                 : "Contact your organization administrator to set up workspaces."}
             </p>
           </div>
@@ -518,11 +518,17 @@ export default function WorkspacesPage() {
 
                 {/* Card Footer Meta */}
                 <div className="pt-4 border-t border-[var(--outline-variant)]/20 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-1.5 text-[var(--on-surface-variant)] font-medium">
-                    <span className="material-symbols-outlined text-[16px] opacity-70">
-                      group
-                    </span>
-                    <span>{ws.member_count ?? 0} member(s)</span>
+                  <div className="flex items-center gap-4 text-[var(--on-surface-variant)] font-medium">
+                    <div className="flex items-center gap-1.5" title="Workspace members">
+                      <span className="material-symbols-outlined text-[16px] opacity-70">
+                        group
+                      </span>
+                      <span>{ws.member_count ?? 0} member(s)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5" title="Workspace subjects">
+                      <span className="material-symbols-outlined text-[15px]">menu_book</span>
+                      <span>{ws.subject_count ?? 0} subject(s)</span>
+                    </div>
                   </div>
 
                   {hasPermission("member.read") && (

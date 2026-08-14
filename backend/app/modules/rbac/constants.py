@@ -25,9 +25,13 @@ class OrganizationPermission:
     UPDATE = "organization.update"
 
 
-class ClassroomPermission:
-    CREATE = "classroom.create"
-    UPDATE = "classroom.update"
+class SubjectPermission:
+    CREATE = "subject.create"
+    READ = "subject.read"
+    UPDATE = "subject.update"
+    DELETE = "subject.delete"
+    TEACHER_ADD = "subject.teacher.add"
+    TEACHER_REMOVE = "subject.teacher.remove"
 
 
 class AssignmentPermission:
