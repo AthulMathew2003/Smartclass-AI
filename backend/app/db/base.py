@@ -11,4 +11,9 @@ from app.modules.organizations.models import (  # noqa: F401
 )
 from app.modules.rbac.models import Permission, RolePermission  # noqa: F401
 from app.modules.subjects.models import Subject, SubjectTeacher  # noqa: F401
-from app.modules.assignments.models import Assignment, AssignmentAttachment, AssignmentSubmission  # noqa: F401
+from app.modules.assignments.models import (  # noqa: F401
+    Assignment,
+    AssignmentAttachment,
+    AssignmentSubmission,
+    SubmissionAttachment
+)

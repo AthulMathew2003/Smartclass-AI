@@ -54,7 +54,7 @@ def test_validate_attachment_request_file_size():
         validate_attachment_request("application/pdf", -10, "file.pdf")
 
     with pytest.raises(ValidationException, match="exceeds maximum limit"):
-        validate_attachment_request("application/pdf", 11 * 1024 * 1024, "large.pdf")
+        validate_attachment_request("application/pdf", 26 * 1024 * 1024, "large.pdf")
 
 
 def test_generate_attachment_s3_key():

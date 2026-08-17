@@ -9,8 +9,9 @@ from app.core.exceptions import ValidationException
 
 # ── Allowed MIME Types & Extensions ─────────────────────────────
 ALLOWED_ATTACHMENT_MIME_TYPES: Dict[str, str] = {
-    # PDF
+    # PDF & Text
     "application/pdf": "pdf",
+    "text/plain": "txt",
     # Images
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -21,6 +22,9 @@ ALLOWED_ATTACHMENT_MIME_TYPES: Dict[str, str] = {
     # Spreadsheets
     "application/vnd.ms-excel": "xls",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    # Presentations
+    "application/vnd.ms-powerpoint": "ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 }
 
 # Explicitly Disallowed / Dangerous MIME Types
@@ -105,3 +109,19 @@ def generate_attachment_s3_key(
     clean_content_type = content_type.strip().lower()
     ext = ALLOWED_ATTACHMENT_MIME_TYPES.get(clean_content_type, "bin")
     return f"assignments/{assignment_id}/attachments/{attachment_id}.{ext}"
+
+
+def generate_submission_attachment_s3_key(
+    assignment_id: uuid.UUID,
+    student_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    content_type: str
+) -> str:
+    """
+    Generate a server-controlled S3 object key for a student submission attachment.
+
+    Format: submissions/{assignment_id}/{student_id}/{attachment_id}.{extension}
+    """
+    clean_content_type = content_type.strip().lower()
+    ext = ALLOWED_ATTACHMENT_MIME_TYPES.get(clean_content_type, "bin")
+    return f"submissions/{assignment_id}/{student_id}/{attachment_id}.{ext}"

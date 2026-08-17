@@ -200,3 +200,48 @@ class AssignmentSubmission(Base):
     assignment = relationship("Assignment", back_populates="submissions")
     student = relationship("User", foreign_keys=[submission_student_id], lazy="selectin")
     grader = relationship("User", foreign_keys=[submission_graded_by], lazy="selectin")
+    attachments = relationship(
+        "SubmissionAttachment",
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+
+
+class SubmissionAttachment(Base):
+    __tablename__ = "tbl_submission_attachments"
+
+    attachment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+    attachment_submission_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tbl_assignment_submissions.submission_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    attachment_s3_key: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+    attachment_original_filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )
+    attachment_content_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False
+    )
+    attachment_size: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False
+    )
+    attachment_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    submission = relationship("AssignmentSubmission", back_populates="attachments")

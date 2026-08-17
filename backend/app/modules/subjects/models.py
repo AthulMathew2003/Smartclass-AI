@@ -63,6 +63,7 @@ class Subject(Base):
         nullable=False
     )
 
+    workspace = relationship("Workspace", foreign_keys=[subject_workspace_id], lazy="selectin")
     _teachers = relationship("SubjectTeacher", back_populates="subject", cascade="all, delete-orphan")
     assignments = relationship("Assignment", back_populates="subject", cascade="all, delete-orphan")
 

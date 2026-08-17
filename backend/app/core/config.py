@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "ap-south-1"
     AWS_S3_BUCKET: str = ""
-    ASSIGNMENT_ATTACHMENT_MAX_SIZE_MB: int = 10
+    ASSIGNMENT_ATTACHMENT_MAX_SIZE_MB: int = 25
+    ASSIGNMENT_MAX_ATTACHMENTS_COUNT: int = 10
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

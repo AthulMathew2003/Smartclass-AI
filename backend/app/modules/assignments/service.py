@@ -1,28 +1,54 @@
 import uuid
-from typing import List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.storage import S3StorageService
-from app.modules.assignments.models import Assignment, AssignmentAttachment, AssignmentStatus
+from app.modules.assignments.models import (
+    Assignment,
+    AssignmentAttachment,
+    AssignmentStatus,
+    AssignmentSubmission,
+    SubmissionStatus,
+    SubmissionAttachment
+)
 from app.modules.assignments.repository import AssignmentRepository
 from app.modules.assignments.schemas import (
     AssignmentCreateRequest,
     AssignmentUpdateRequest,
     AssignmentResponse,
+    SubmissionSummaryResponse,
     AttachmentUploadUrlRequest,
     AttachmentUploadUrlResponse,
     AttachmentConfirmRequest,
     AttachmentResponse,
-    AttachmentDownloadUrlResponse
+    AttachmentDownloadUrlResponse,
+    SubmissionResponse,
+    SubmissionAttachmentResponse,
+    SubmissionFileUploadUrlRequest,
+    SubmissionFileUploadUrlResponse,
+    SubmissionFileConfirmRequest,
+    StudentSubmitRequest,
+    GradeSubmissionRequest,
+    ReturnSubmissionRequest
 )
 from app.modules.assignments.attachments import (
     validate_attachment_request,
     sanitize_filename,
-    generate_attachment_s3_key
+    generate_attachment_s3_key,
+    generate_submission_attachment_s3_key
 )
+from app.modules.users.models import User
 from app.modules.subjects.models import Subject, SubjectStatus
 from app.modules.organizations.models import Workspace, WorkspaceStatus
-from app.core.exceptions import ConflictException, NotFoundException, ForbiddenException, StorageException, ValidationException
+from app.core.exceptions import (
+    ConflictException,
+    NotFoundException,
+    ForbiddenException,
+    StorageException,
+    ValidationException
+)
 
 
 class AssignmentService:
@@ -62,6 +88,29 @@ class AssignmentService:
 
         return subject, workspace
 
+    async def _verify_assignment_hierarchy(
+        self,
+        assignment_id: uuid.UUID,
+        org_id: uuid.UUID,
+        allow_archived_parent: bool = False
+    ) -> Tuple[Assignment, Subject, Workspace]:
+        """
+        Verify that:
+        1. The assignment exists.
+        2. The assignment's subject belongs to a workspace.
+        3. The workspace belongs to the active organization.
+        """
+        assignment = await self.repo.get_assignment_by_id(assignment_id)
+        if not assignment:
+            raise NotFoundException("Assignment not found.")
+
+        subject, workspace = await self._verify_subject_hierarchy(
+            assignment.assignment_subject_id,
+            org_id,
+            allow_archived_parent=allow_archived_parent
+        )
+        return assignment, subject, workspace
+
     async def _verify_teacher_or_admin(
         self,
         user_id: uuid.UUID,
@@ -76,12 +125,10 @@ class AssignmentService:
         if is_org_admin:
             return
 
-        # Check if the user is a workspace member
         is_ws_member = await self.repo.is_user_workspace_member(user_id, workspace_id)
         if not is_ws_member:
             raise ForbiddenException("Access denied. You are not a member of this workspace.")
 
-        # Check if the user is assigned to the subject
         is_assigned_teacher = await self.repo.is_user_subject_teacher(subject_id, user_id)
         if not is_assigned_teacher:
             raise ForbiddenException("Access denied. You are not assigned to this subject.")
@@ -102,7 +149,7 @@ class AssignmentService:
         if not is_ws_member:
             raise ForbiddenException("Access denied. You are not a member of this workspace.")
 
-    # ── Assignment Operations ───────────────────────────────────
+    # ── Assignment CRUD Operations ──────────────────────────────
 
     async def create_assignment(
         self,
@@ -121,10 +168,24 @@ class AssignmentService:
             is_org_admin
         )
 
+        title = payload.assignment_title.strip()
+        if not title:
+            raise ValidationException("Assignment title cannot be empty or whitespace only.")
+        if len(title) > 255:
+            raise ValidationException("Assignment title must be 255 characters or fewer.")
+
+        now_utc = datetime.now(timezone.utc)
+        if payload.assignment_due_at is not None:
+            due_at = payload.assignment_due_at
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            if due_at < now_utc:
+                raise ValidationException("Due date cannot be in the past when creating an assignment.")
+
         status = payload.assignment_status or AssignmentStatus.DRAFT
         assignment = await self.repo.create_assignment(
             subject_id=subject.subject_id,
-            title=payload.assignment_title.strip(),
+            title=title,
             description=payload.assignment_description,
             status=status,
             due_at=payload.assignment_due_at,
@@ -135,65 +196,148 @@ class AssignmentService:
     async def list_assignments(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
         is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None,
         status_filter: Optional[AssignmentStatus] = None
     ) -> List[AssignmentResponse]:
         """
-        List assignments for a subject.
-        - Teachers & Org Admins see all assignments including DRAFT and ARCHIVED (or filtered).
-        - Students / non-teachers see only published and closed assignments.
+        List accessible assignments.
+        - If subject_id is supplied: list assignments for that specific subject.
+        - If subject_id is omitted (Global View):
+          - Teachers / Org Admins see assignments they are authorized to manage with aggregated submission metrics.
+          - Students see published/closed assignments from all their enrolled workspaces with personal submission status.
         """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
-        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+        if subject_id is not None:
+            subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
+            await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
 
-        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
-        assignments = await self.repo.list_assignments_by_subject(
-            subject_id=subject.subject_id,
-            status_filter=status_filter,
-            include_drafts=is_teacher,
-            include_archived=is_teacher
+            is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
+            assignments = await self.repo.list_assignments_by_subject(
+                subject_id=subject.subject_id,
+                status_filter=status_filter,
+                include_drafts=is_teacher,
+                include_archived=is_teacher
+            )
+
+            responses = []
+            for a in assignments:
+                resp = AssignmentResponse.model_validate(a)
+                resp.subject_name = subject.subject_name
+                resp.workspace_id = workspace.workspace_id
+                resp.workspace_name = workspace.workspace_name
+                if is_teacher:
+                    metrics = await self.repo.get_submission_metrics(a.assignment_id)
+                    resp.submission_count = metrics["total"]
+                    resp.graded_count = metrics["graded"]
+                    resp.pending_count = metrics["pending"]
+                else:
+                    sub = await self.repo.get_submission(a.assignment_id, requesting_user_id)
+                    if sub:
+                        resp.student_submission = SubmissionSummaryResponse.model_validate(sub)
+                responses.append(resp)
+            return responses
+
+        # Global list across organization
+        is_teacher = (
+            is_org_admin
+            or (await self.repo.is_user_any_subject_teacher(org_id, requesting_user_id))
+            or (await self.repo.is_user_teacher_or_admin_role(org_id, requesting_user_id))
         )
-        return [AssignmentResponse.model_validate(a) for a in assignments]
+        is_teacher_or_admin = is_teacher
+
+        if is_teacher:
+            assignments = await self.repo.list_global_assignments_for_teacher_or_admin(
+                org_id=org_id,
+                user_id=requesting_user_id,
+                is_org_admin=is_org_admin,
+                status_filter=status_filter
+            )
+        else:
+            assignments = await self.repo.list_global_assignments_for_student(
+                org_id=org_id,
+                user_id=requesting_user_id,
+                status_filter=status_filter
+            )
+
+        responses = []
+        for a in assignments:
+            resp = AssignmentResponse.model_validate(a)
+            if a.subject:
+                resp.subject_name = a.subject.subject_name
+                if a.subject.workspace:
+                    resp.workspace_id = a.subject.workspace.workspace_id
+                    resp.workspace_name = a.subject.workspace.workspace_name
+
+            if is_teacher_or_admin:
+                metrics = await self.repo.get_submission_metrics(a.assignment_id)
+                resp.submission_count = metrics["total"]
+                resp.graded_count = metrics["graded"]
+                resp.pending_count = metrics["pending"]
+            else:
+                sub = await self.repo.get_submission(a.assignment_id, requesting_user_id)
+                if sub:
+                    resp.student_submission = SubmissionSummaryResponse.model_validate(sub)
+
+            responses.append(resp)
+        return responses
 
     async def get_assignment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AssignmentResponse:
         """
         Retrieve a single assignment.
-        - Drafts and archived are invisible to students / non-teachers.
+        - Drafts and archived are invisible to students.
         """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
-        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
 
         is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
 
         if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
             raise NotFoundException("Assignment not found.")
 
-        return AssignmentResponse.model_validate(assignment)
+        resp = AssignmentResponse.model_validate(assignment)
+        resp.subject_name = subject.subject_name
+        resp.workspace_id = workspace.workspace_id
+        resp.workspace_name = workspace.workspace_name
+        if is_teacher:
+            metrics = await self.repo.get_submission_metrics(assignment.assignment_id)
+            resp.submission_count = metrics["total"]
+            resp.graded_count = metrics["graded"]
+            resp.pending_count = metrics["pending"]
+        else:
+            sub = await self.repo.get_submission(assignment.assignment_id, requesting_user_id)
+            if sub:
+                resp.student_submission = SubmissionSummaryResponse.model_validate(sub)
+        return resp
 
     async def update_assignment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         payload: AssignmentUpdateRequest,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AssignmentResponse:
         """Update an existing assignment's metadata (title, description, due_at)."""
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -202,14 +346,29 @@ class AssignmentService:
             is_org_admin
         )
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
-
         if assignment.assignment_status == AssignmentStatus.ARCHIVED:
             raise ConflictException("Archived assignments cannot be modified.")
 
-        title = payload.assignment_title.strip() if payload.assignment_title is not None else None
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Closed assignments cannot be modified.")
+
+        now_utc = datetime.now(timezone.utc)
+        title = None
+        if payload.assignment_title is not None:
+            title = payload.assignment_title.strip()
+            if not title:
+                raise ValidationException("Assignment title cannot be empty or whitespace only.")
+            if len(title) > 255:
+                raise ValidationException("Assignment title must be 255 characters or fewer.")
+
+        if payload.assignment_due_at is not None:
+            due_at = payload.assignment_due_at
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            # When editing a published assignment, do not allow changing due_at to a past time
+            if assignment.assignment_status == AssignmentStatus.PUBLISHED and due_at < now_utc:
+                raise ValidationException("Cannot change due date to a past time for a published assignment.")
+
         updated = await self.repo.update_assignment(
             assignment=assignment,
             title=title,
@@ -221,13 +380,16 @@ class AssignmentService:
     async def publish_assignment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AssignmentResponse:
         """Publish a DRAFT assignment (DRAFT -> PUBLISHED)."""
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -235,10 +397,6 @@ class AssignmentService:
             workspace.workspace_id,
             is_org_admin
         )
-
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
 
         if assignment.assignment_status == AssignmentStatus.ARCHIVED:
             raise ConflictException("Archived assignments cannot be published.")
@@ -249,19 +407,34 @@ class AssignmentService:
         if assignment.assignment_status != AssignmentStatus.DRAFT:
             raise ConflictException(f"Cannot publish assignment with status '{assignment.assignment_status.value}'.")
 
+        # Validate assignment data before publishing
+        if not assignment.assignment_title or not assignment.assignment_title.strip():
+            raise ValidationException("Cannot publish assignment without a valid title.")
+
+        now_utc = datetime.now(timezone.utc)
+        if assignment.assignment_due_at is not None:
+            due_at = assignment.assignment_due_at
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            if due_at < now_utc:
+                raise ValidationException("Cannot publish an assignment with a due date in the past.")
+
         published = await self.repo.set_assignment_status(assignment, AssignmentStatus.PUBLISHED)
         return AssignmentResponse.model_validate(published)
 
     async def close_assignment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AssignmentResponse:
         """Close an open assignment (PUBLISHED -> CLOSED)."""
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -269,10 +442,6 @@ class AssignmentService:
             workspace.workspace_id,
             is_org_admin
         )
-
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
 
         if assignment.assignment_status == AssignmentStatus.ARCHIVED:
             raise ConflictException("Archived assignments cannot be closed.")
@@ -289,13 +458,16 @@ class AssignmentService:
     async def archive_assignment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AssignmentResponse:
         """Soft-delete (archive) an assignment."""
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -303,10 +475,6 @@ class AssignmentService:
             workspace.workspace_id,
             is_org_admin
         )
-
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
 
         if assignment.assignment_status == AssignmentStatus.ARCHIVED:
             raise ConflictException("Assignment is already archived.")
@@ -314,21 +482,21 @@ class AssignmentService:
         archived = await self.repo.archive_assignment(assignment)
         return AssignmentResponse.model_validate(archived)
 
-    # ── Assignment Attachment Operations (Step 10.3A) ───────────
+    # ── Teacher Assignment Attachment Operations ────────────────
 
     async def request_attachment_upload_url(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         payload: AttachmentUploadUrlRequest,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AttachmentUploadUrlResponse:
-        """
-        Validate attachment parameters, verify permissions, and generate a presigned PUT URL.
-        """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -337,17 +505,13 @@ class AssignmentService:
             is_org_admin
         )
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
+        if assignment.assignment_status in (AssignmentStatus.ARCHIVED, AssignmentStatus.CLOSED):
+            raise ConflictException("Cannot add attachments to closed or archived assignments.")
 
-        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
-            raise ConflictException("Archived assignments cannot have attachments added.")
+        count = await self.repo.count_assignment_attachments(assignment.assignment_id)
+        if count >= settings.ASSIGNMENT_MAX_ATTACHMENTS_COUNT:
+            raise ValidationException(f"Maximum of {settings.ASSIGNMENT_MAX_ATTACHMENTS_COUNT} attachments per assignment reached.")
 
-        if assignment.assignment_status == AssignmentStatus.CLOSED:
-            raise ConflictException("Closed assignments cannot have attachments added.")
-
-        # Validate request
         validate_attachment_request(payload.content_type, payload.file_size, payload.filename)
 
         attachment_id = uuid.uuid4()
@@ -368,16 +532,16 @@ class AssignmentService:
     async def confirm_attachment_upload(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         payload: AttachmentConfirmRequest,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AttachmentResponse:
-        """
-        Verify the uploaded object in S3 and save the attachment metadata in PostgreSQL.
-        """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -385,10 +549,6 @@ class AssignmentService:
             workspace.workspace_id,
             is_org_admin
         )
-
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
 
         if assignment.assignment_status in (AssignmentStatus.ARCHIVED, AssignmentStatus.CLOSED):
             raise ConflictException("Cannot add attachments to closed or archived assignments.")
@@ -400,7 +560,6 @@ class AssignmentService:
         validate_attachment_request(payload.content_type, payload.file_size, payload.original_filename)
         clean_filename = sanitize_filename(payload.original_filename)
 
-        # Verify object exists in S3
         if not self.storage.object_exists(payload.s3_key):
             raise StorageException("Attachment file not found in storage. Upload may have failed or expired.")
 
@@ -418,21 +577,20 @@ class AssignmentService:
     async def list_attachments(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> List[AttachmentResponse]:
-        """
-        List attachments for an assignment.
-        - Students can only view attachments for published or closed assignments.
-        """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
-        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
 
         is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
         if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
@@ -444,21 +602,21 @@ class AssignmentService:
     async def get_attachment_download_url(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         attachment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> AttachmentDownloadUrlResponse:
-        """
-        Generate a short-lived presigned GET URL for downloading an attachment.
-        """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id, allow_archived_parent=True)
-        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
 
         is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
         if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
@@ -483,16 +641,16 @@ class AssignmentService:
     async def delete_attachment(
         self,
         org_id: uuid.UUID,
-        subject_id: uuid.UUID,
         assignment_id: uuid.UUID,
         attachment_id: uuid.UUID,
         requesting_user_id: uuid.UUID,
-        is_org_admin: bool
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
     ) -> None:
-        """
-        Delete an attachment (S3 object and database metadata).
-        """
-        subject, workspace = await self._verify_subject_hierarchy(subject_id, org_id)
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
         await self._verify_teacher_or_admin(
             requesting_user_id,
             org_id,
@@ -501,25 +659,383 @@ class AssignmentService:
             is_org_admin
         )
 
-        assignment = await self.repo.get_assignment_by_id(assignment_id)
-        if not assignment or assignment.assignment_subject_id != subject.subject_id:
-            raise NotFoundException("Assignment not found.")
-
-        if assignment.assignment_status == AssignmentStatus.ARCHIVED:
-            raise ConflictException("Archived assignments cannot be modified.")
-
-        if assignment.assignment_status == AssignmentStatus.CLOSED:
-            raise ConflictException("Closed assignments cannot have attachments deleted.")
+        if assignment.assignment_status in (AssignmentStatus.ARCHIVED, AssignmentStatus.CLOSED):
+            raise ConflictException("Cannot modify attachments for closed or archived assignments.")
 
         attachment = await self.repo.get_attachment_by_id(attachment_id)
         if not attachment or attachment.attachment_assignment_id != assignment.assignment_id:
             raise NotFoundException("Attachment not found.")
 
-        # Delete S3 object safely
         try:
             self.storage.delete_object(attachment.attachment_s3_key)
         except Exception:
-            # Continue removing from DB if S3 deletion fails or already deleted
             pass
 
         await self.repo.delete_attachment(attachment)
+
+    # ── Student Submission & Multi-Version Resubmission ─────────
+
+    async def submit_assignment(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        student_id: uuid.UUID,
+        payload: StudentSubmitRequest,
+        is_org_admin: bool = False
+    ) -> SubmissionResponse:
+        """
+        Submit or resubmit an assignment.
+        - Verifies workspace membership and assignment visibility.
+        - Rejects submissions to draft/archived/closed assignments.
+        - Calculates status (submitted vs late).
+        """
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        await self._verify_workspace_access(student_id, workspace.workspace_id, is_org_admin)
+
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED):
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Submissions are closed for this assignment.")
+
+        now_utc = datetime.now(timezone.utc)
+        sub_status = SubmissionStatus.SUBMITTED
+        if assignment.assignment_due_at is not None:
+            due_at = assignment.assignment_due_at
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            if now_utc > due_at:
+                sub_status = SubmissionStatus.LATE
+
+        # Check existing submission
+        existing_sub = await self.repo.get_submission(assignment.assignment_id, student_id)
+
+        if existing_sub is None:
+            # Initial submission
+            submission = await self.repo.create_submission(
+                assignment_id=assignment.assignment_id,
+                student_id=student_id,
+                status=sub_status,
+                submitted_at=now_utc
+            )
+        else:
+            # Resubmission / Replacement: delete old S3 objects and DB attachment rows
+            if existing_sub.attachments:
+                for old_att in list(existing_sub.attachments):
+                    try:
+                        self.storage.delete_object(old_att.attachment_s3_key)
+                    except Exception:
+                        pass
+                    await self.db.delete(old_att)
+                existing_sub.attachments.clear()
+
+            existing_sub.submission_status = sub_status
+            existing_sub.submission_submitted_at = now_utc
+            # Reset active grading state on new submission
+            existing_sub.submission_grade = None
+            existing_sub.submission_feedback = None
+            existing_sub.submission_graded_by = None
+            existing_sub.submission_graded_at = None
+            self.db.add(existing_sub)
+            await self.db.flush()
+            submission = existing_sub
+
+        # Attach confirmed new files directly to this submission
+        if payload.files:
+            if len(payload.files) > settings.ASSIGNMENT_MAX_ATTACHMENTS_COUNT:
+                raise ValidationException(f"Cannot attach more than {settings.ASSIGNMENT_MAX_ATTACHMENTS_COUNT} files.")
+
+            for f in payload.files:
+                validate_attachment_request(f.content_type, f.file_size, f.original_filename)
+                clean_name = sanitize_filename(f.original_filename)
+                expected_prefix = f"submissions/{assignment.assignment_id}/{student_id}/"
+                if not f.s3_key.startswith(expected_prefix) and not f.s3_key.startswith("submissions/"):
+                    raise ValidationException("Invalid S3 key for this submission.")
+
+                if not self.storage.object_exists(f.s3_key):
+                    raise StorageException(f"Submission file '{clean_name}' not found in storage.")
+
+                await self.repo.create_submission_attachment(
+                    attachment_id=f.attachment_id,
+                    submission_id=submission.submission_id,
+                    s3_key=f.s3_key,
+                    original_filename=clean_name,
+                    content_type=f.content_type.strip(),
+                    size=f.file_size
+                )
+
+        await self.db.flush()
+        # Fetch refreshed submission with attachments
+        refreshed = await self.repo.get_submission(assignment.assignment_id, student_id)
+        return await self._format_submission_response(refreshed or submission)
+
+    async def request_submission_file_upload_url(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        student_id: uuid.UUID,
+        payload: SubmissionFileUploadUrlRequest,
+        is_org_admin: bool = False
+    ) -> SubmissionFileUploadUrlResponse:
+        """
+        Request a presigned upload URL for a student submission file.
+        """
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        await self._verify_workspace_access(student_id, workspace.workspace_id, is_org_admin)
+
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED):
+            raise NotFoundException("Assignment not found.")
+
+        if assignment.assignment_status == AssignmentStatus.CLOSED:
+            raise ConflictException("Submissions are closed for this assignment.")
+
+        validate_attachment_request(payload.content_type, payload.file_size, payload.filename)
+
+        attachment_id = uuid.uuid4()
+        s3_key = generate_submission_attachment_s3_key(
+            assignment_id=assignment.assignment_id,
+            student_id=student_id,
+            attachment_id=attachment_id,
+            content_type=payload.content_type
+        )
+
+        upload_url = self.storage.generate_upload_url(
+            key=s3_key,
+            content_type=payload.content_type.strip(),
+            expires_in=900
+        )
+
+        return SubmissionFileUploadUrlResponse(
+            attachment_id=attachment_id,
+            s3_key=s3_key,
+            upload_url=upload_url,
+            expires_in=900
+        )
+
+    async def get_submission(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool,
+        target_student_id: Optional[uuid.UUID] = None
+    ) -> Optional[SubmissionResponse]:
+        """
+        Get submission details.
+        - Students can only view their own submission.
+        - Teachers / Org Admins can view any student's submission via target_student_id.
+        """
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+
+        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
+
+        if target_student_id is not None and target_student_id != requesting_user_id:
+            if not is_teacher:
+                raise ForbiddenException("Access denied. You cannot view another student's submission.")
+            student_id = target_student_id
+        else:
+            student_id = requesting_user_id
+
+        if assignment.assignment_status in (AssignmentStatus.DRAFT, AssignmentStatus.ARCHIVED) and not is_teacher:
+            raise NotFoundException("Assignment not found.")
+
+        sub = await self.repo.get_submission(assignment.assignment_id, student_id)
+        if not sub:
+            return None
+        return await self._format_submission_response(sub)
+
+    async def list_submissions_for_teacher(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> List[SubmissionResponse]:
+        """
+        List all student submissions for an assignment (Teachers & Org Admins only).
+        """
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        submissions = await self.repo.list_submissions_by_assignment(assignment.assignment_id)
+        resps = []
+        for s in submissions:
+            resps.append(await self._format_submission_response(s))
+        return resps
+
+    async def get_submission_attachment_download_url(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        attachment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AttachmentDownloadUrlResponse:
+        """
+        Generate presigned download URL for a student submission attachment.
+        - Authorized only for the submitting student OR assigned teacher / Org Admin.
+        """
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        await self._verify_workspace_access(requesting_user_id, workspace.workspace_id, is_org_admin)
+
+        attachment = await self.repo.get_submission_attachment_by_id(attachment_id)
+        if not attachment:
+            raise NotFoundException("Submission attachment not found.")
+
+        # Verify submission ownership
+        submission = attachment.submission
+        if not submission or submission.submission_assignment_id != assignment.assignment_id:
+            raise NotFoundException("Submission attachment not found.")
+
+        is_teacher = is_org_admin or (await self.repo.is_user_subject_teacher(subject.subject_id, requesting_user_id))
+        is_owner = submission.submission_student_id == requesting_user_id
+
+        if not is_teacher and not is_owner:
+            raise ForbiddenException("Access denied. You cannot access another student's submission files.")
+
+        download_url = self.storage.generate_download_url(
+            key=attachment.attachment_s3_key,
+            expires_in=900
+        )
+
+        return AttachmentDownloadUrlResponse(
+            attachment_id=attachment.attachment_id,
+            original_filename=attachment.attachment_original_filename,
+            download_url=download_url,
+            expires_in=900
+        )
+
+    # ── Teacher Grading Operations ──────────────────────────────
+
+    async def grade_submission(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        payload: GradeSubmissionRequest,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> SubmissionResponse:
+        """Grade a student submission."""
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        submission = await self.repo.get_submission_by_id(submission_id)
+        if not submission or submission.submission_assignment_id != assignment.assignment_id:
+            raise NotFoundException("Submission not found.")
+
+        if payload.grade < 0 or payload.grade > 100:
+            raise ValidationException("Grade must be between 0 and 100.")
+
+        now_utc = datetime.now(timezone.utc)
+        submission.submission_grade = payload.grade
+        submission.submission_feedback = payload.feedback
+        submission.submission_status = SubmissionStatus.GRADED
+        submission.submission_graded_by = requesting_user_id
+        submission.submission_graded_at = now_utc
+        self.db.add(submission)
+
+        await self.db.flush()
+        return await self._format_submission_response(submission)
+
+    async def return_submission(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        payload: ReturnSubmissionRequest,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> SubmissionResponse:
+        """Return a student submission."""
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(assignment_id, org_id)
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        submission = await self.repo.get_submission_by_id(submission_id)
+        if not submission or submission.submission_assignment_id != assignment.assignment_id:
+            raise NotFoundException("Submission not found.")
+
+        now_utc = datetime.now(timezone.utc)
+        submission.submission_status = SubmissionStatus.RETURNED
+        if payload.feedback:
+            submission.submission_feedback = payload.feedback
+        self.db.add(submission)
+
+        await self.db.flush()
+        return await self._format_submission_response(submission)
+
+    async def _format_submission_response(
+        self,
+        sub: AssignmentSubmission
+    ) -> SubmissionResponse:
+        """Helper to format full submission with attachments."""
+        att_resps = []
+        if sub.attachments:
+            for a in sub.attachments:
+                att_resps.append(SubmissionAttachmentResponse(
+                    attachment_id=a.attachment_id,
+                    submission_id=a.attachment_submission_id,
+                    original_filename=a.attachment_original_filename,
+                    content_type=a.attachment_content_type,
+                    size=a.attachment_size,
+                    created_at=a.attachment_created_at
+                ))
+
+        student_name = None
+        student_email = None
+        if "student" in sub.__dict__ and sub.student:
+            student_name = f"{sub.student.user_first_name} {sub.student.user_last_name}".strip()
+            student_email = sub.student.user_email
+        elif sub.submission_student_id:
+            user = await self.db.get(User, sub.submission_student_id)
+            if user:
+                student_name = f"{user.user_first_name} {user.user_last_name}".strip()
+                student_email = user.user_email
+
+        return SubmissionResponse(
+            submission_id=sub.submission_id,
+            submission_assignment_id=sub.submission_assignment_id,
+            submission_student_id=sub.submission_student_id,
+            submission_status=sub.submission_status,
+            submission_submitted_at=sub.submission_submitted_at,
+            submission_grade=float(sub.submission_grade) if sub.submission_grade is not None else None,
+            submission_feedback=sub.submission_feedback,
+            submission_graded_by=sub.submission_graded_by,
+            submission_graded_at=sub.submission_graded_at,
+            submission_created_at=sub.submission_created_at,
+            submission_updated_at=sub.submission_updated_at,
+            student_name=student_name,
+            student_email=student_email,
+            attachments=att_resps
+        )

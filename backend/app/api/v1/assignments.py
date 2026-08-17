@@ -19,22 +19,30 @@ from app.modules.assignments.schemas import (
     AttachmentUploadUrlResponse,
     AttachmentConfirmRequest,
     AttachmentResponse,
-    AttachmentDownloadUrlResponse
+    AttachmentDownloadUrlResponse,
+    SubmissionResponse,
+    SubmissionFileUploadUrlRequest,
+    SubmissionFileUploadUrlResponse,
+    StudentSubmitRequest,
+    GradeSubmissionRequest,
+    ReturnSubmissionRequest
 )
 
 router = APIRouter()
 
 
+# ── Assignment Endpoints ────────────────────────────────────────
+
 @router.get("", response_model=List[AssignmentResponse])
 async def list_assignments(
-    subject_id: uuid.UUID = Query(..., description="Subject ID to list assignments for"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional for global view)"),
     status: Optional[AssignmentStatus] = Query(None, description="Filter assignments by status"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(AssignmentPermission.READ))
 ):
-    """List accessible assignments for a subject."""
+    """List accessible assignments (subject-scoped or global across organization)."""
     service = AssignmentService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     return await service.list_assignments(
@@ -70,7 +78,7 @@ async def create_assignment(
 @router.get("/{assignment_id}", response_model=AssignmentResponse)
 async def get_assignment(
     assignment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -81,10 +89,10 @@ async def get_assignment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     return await service.get_assignment(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
 
 
@@ -92,7 +100,7 @@ async def get_assignment(
 async def update_assignment(
     assignment_id: uuid.UUID,
     payload: AssignmentUpdateRequest,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -103,11 +111,11 @@ async def update_assignment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.update_assignment(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         payload=payload,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
     await db.commit()
     return res
@@ -116,7 +124,7 @@ async def update_assignment(
 @router.post("/{assignment_id}/publish", response_model=AssignmentResponse)
 async def publish_assignment(
     assignment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -127,10 +135,10 @@ async def publish_assignment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.publish_assignment(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
     await db.commit()
     return res
@@ -139,7 +147,7 @@ async def publish_assignment(
 @router.post("/{assignment_id}/close", response_model=AssignmentResponse)
 async def close_assignment(
     assignment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -150,10 +158,10 @@ async def close_assignment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.close_assignment(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
     await db.commit()
     return res
@@ -162,7 +170,7 @@ async def close_assignment(
 @router.delete("/{assignment_id}", response_model=AssignmentResponse)
 async def delete_assignment(
     assignment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -173,22 +181,22 @@ async def delete_assignment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.archive_assignment(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
     await db.commit()
     return res
 
 
-# ── Assignment Attachment Endpoints (Step 10.3A) ─────────────────
+# ── Teacher Assignment Attachment Endpoints ─────────────────────
 
 @router.post("/{assignment_id}/attachments/upload-url", response_model=AttachmentUploadUrlResponse)
 async def request_attachment_upload_url(
     assignment_id: uuid.UUID,
     payload: AttachmentUploadUrlRequest,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -199,11 +207,11 @@ async def request_attachment_upload_url(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     return await service.request_attachment_upload_url(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         payload=payload,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
 
 
@@ -211,7 +219,7 @@ async def request_attachment_upload_url(
 async def confirm_attachment_upload(
     assignment_id: uuid.UUID,
     payload: AttachmentConfirmRequest,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -222,11 +230,11 @@ async def confirm_attachment_upload(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.confirm_attachment_upload(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         payload=payload,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
     await db.commit()
     return res
@@ -235,7 +243,7 @@ async def confirm_attachment_upload(
 @router.get("/{assignment_id}/attachments", response_model=List[AttachmentResponse])
 async def list_attachments(
     assignment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -246,10 +254,10 @@ async def list_attachments(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     return await service.list_attachments(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
 
 
@@ -257,7 +265,7 @@ async def list_attachments(
 async def get_attachment_download_url(
     assignment_id: uuid.UUID,
     attachment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -268,11 +276,11 @@ async def get_attachment_download_url(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     return await service.get_attachment_download_url(
         org_id=org.organization_id,
-        subject_id=subject_id,
         assignment_id=assignment_id,
         attachment_id=attachment_id,
         requesting_user_id=current_user.user_id,
-        is_org_admin=is_org_admin
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
     )
 
 
@@ -280,7 +288,7 @@ async def get_attachment_download_url(
 async def delete_attachment(
     assignment_id: uuid.UUID,
     attachment_id: uuid.UUID,
-    subject_id: uuid.UUID = Query(..., description="Subject ID"),
+    subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -291,10 +299,177 @@ async def delete_attachment(
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     await service.delete_attachment(
         org_id=org.organization_id,
-        subject_id=subject_id,
+        assignment_id=assignment_id,
+        attachment_id=attachment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        subject_id=subject_id
+    )
+    await db.commit()
+
+
+# ── Student Submission & Resubmission Endpoints ─────────────────
+
+@router.get("/{assignment_id}/submission", response_model=Optional[SubmissionResponse])
+async def get_student_submission(
+    assignment_id: uuid.UUID,
+    student_id: Optional[uuid.UUID] = Query(None, description="Student ID (teachers/admins only)"),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.READ))
+):
+    """
+    Retrieve submission history and versions.
+    - Students view their own submission.
+    - Teachers/Admins can view a student's submission via student_id.
+    """
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    return await service.get_submission(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        target_student_id=student_id
+    )
+
+
+@router.get("/{assignment_id}/submissions", response_model=List[SubmissionResponse])
+async def list_assignment_submissions(
+    assignment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.READ))
+):
+    """List all student submissions for an assignment (Teachers/Admins only)."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    return await service.list_submissions_for_teacher(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+
+
+@router.post("/{assignment_id}/submit", response_model=SubmissionResponse)
+async def submit_assignment(
+    assignment_id: uuid.UUID,
+    payload: StudentSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.READ))
+):
+    """
+    Submit or resubmit an assignment (Students only).
+    - Creates a new submission version on every resubmission.
+    """
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.submit_assignment(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        student_id=current_user.user_id,
+        payload=payload,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.post("/{assignment_id}/submission/files/upload-url", response_model=SubmissionFileUploadUrlResponse)
+async def request_submission_file_upload_url(
+    assignment_id: uuid.UUID,
+    payload: SubmissionFileUploadUrlRequest,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.READ))
+):
+    """Request a presigned S3 upload URL for a student submission file."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    return await service.request_submission_file_upload_url(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        student_id=current_user.user_id,
+        payload=payload,
+        is_org_admin=is_org_admin
+    )
+
+
+@router.get("/{assignment_id}/submission/files/{attachment_id}/download-url", response_model=AttachmentDownloadUrlResponse)
+async def get_submission_attachment_download_url(
+    assignment_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.READ))
+):
+    """Get a short-lived presigned GET URL for downloading a student submission attachment."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    return await service.get_submission_attachment_download_url(
+        org_id=org.organization_id,
         assignment_id=assignment_id,
         attachment_id=attachment_id,
         requesting_user_id=current_user.user_id,
         is_org_admin=is_org_admin
     )
+
+
+# ── Teacher Grading Endpoints ───────────────────────────────────
+
+@router.post("/{assignment_id}/submissions/{submission_id}/grade", response_model=SubmissionResponse)
+async def grade_submission(
+    assignment_id: uuid.UUID,
+    submission_id: uuid.UUID,
+    payload: GradeSubmissionRequest,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.UPDATE))
+):
+    """Grade a student submission (Teachers & Org Admins only)."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.grade_submission(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        submission_id=submission_id,
+        payload=payload,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
     await db.commit()
+    return res
+
+
+@router.post("/{assignment_id}/submissions/{submission_id}/return", response_model=SubmissionResponse)
+async def return_submission(
+    assignment_id: uuid.UUID,
+    submission_id: uuid.UUID,
+    payload: ReturnSubmissionRequest,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssignmentPermission.UPDATE))
+):
+    """Return a student submission (Teachers & Org Admins only)."""
+    service = AssignmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.return_submission(
+        org_id=org.organization_id,
+        assignment_id=assignment_id,
+        submission_id=submission_id,
+        payload=payload,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+

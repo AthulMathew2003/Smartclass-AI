@@ -358,3 +358,114 @@ async def test_idor_bola_tenant_workspace_isolation(client: AsyncClient, db_sess
     # 2. Access Assignment A with mismatched / foreign subject_id -> 404
     random_sub_id = str(uuid.uuid4())
     assert (await client.get(f"/api/v1/assignments/{assign_a_id}?subject_id={random_sub_id}", headers=owner_a["headers"])).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_assignment_validation_rules(client: AsyncClient, db_session):
+    user_service = UserService(db_session)
+    owner_data = await _create_user_and_login(client, user_service, "val_owner@test.com", "Owner")
+    await db_session.commit()
+
+    # Onboard
+    await client.post("/api/v1/organizations/onboarding", json={
+        "org_name": "Validation Org", "org_slug": "val-org", "org_type": "School", "org_country": "US", "org_state": "CA", "org_city": "SF",
+        "org_timezone": "UTC", "owner_first_name": "V", "owner_last_name": "O", "owner_phone": "1", "workspace_name": "WS 1"
+    }, headers=owner_data["headers"])
+    org_id = (await client.get("/api/v1/organizations/memberships", headers=owner_data["headers"])).json()[0]["organization_id"]
+    owner_data["headers"]["X-Organization-Id"] = org_id
+    ws_id = (await client.get("/api/v1/workspaces", headers=owner_data["headers"])).json()[0]["workspace_id"]
+
+    sub_res = await client.post("/api/v1/subjects", json={"workspace_id": ws_id, "subject_name": "Math"}, headers=owner_data["headers"])
+    subject_id = sub_res.json()["subject_id"]
+
+    # 1. Empty or whitespace-only title rejected -> 400 / 422
+    assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": ""}, headers=owner_data["headers"])).status_code in (400, 422)
+    assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "   "}, headers=owner_data["headers"])).status_code in (400, 422)
+
+    # 2. Oversized title (>255 chars) rejected
+    assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "A" * 256}, headers=owner_data["headers"])).status_code in (400, 422)
+
+    # 3. Past due date rejected on creation -> 400 / 422
+    assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "Past Assignment", "due_at": "2020-01-01T00:00:00Z"}, headers=owner_data["headers"])).status_code in (400, 422)
+
+    # 4. Valid assignment created
+    assign_res = await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "Valid Assignment", "due_at": "2026-12-31T23:59:59Z"}, headers=owner_data["headers"])
+    assert assign_res.status_code == 201
+    assign_id = assign_res.json()["assignment_id"]
+
+    # 5. Update with empty title rejected
+    assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"title": "   "}, headers=owner_data["headers"])).status_code in (400, 422)
+
+    # 6. Publish assignment
+    pub_res = await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])
+    assert pub_res.status_code == 200
+
+    # 7. Update published assignment with past due date rejected
+    assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"due_at": "2020-01-01T00:00:00Z"}, headers=owner_data["headers"])).status_code in (400, 422)
+
+    # 8. Close assignment
+    await client.post(f"/api/v1/assignments/{assign_id}/close?subject_id={subject_id}", headers=owner_data["headers"])
+
+    # 9. Closed assignment cannot be edited -> 409
+    assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"title": "New Title"}, headers=owner_data["headers"])).status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_global_assignment_listing(client: AsyncClient, db_session):
+    user_service = UserService(db_session)
+    owner_data = await _create_user_and_login(client, user_service, "global_owner@test.com", "Owner")
+    await db_session.commit()
+
+    # Onboard
+    await client.post("/api/v1/organizations/onboarding", json={
+        "org_name": "Global Org", "org_slug": "global-org", "org_type": "School", "org_country": "US", "org_state": "CA", "org_city": "SF",
+        "org_timezone": "UTC", "owner_first_name": "G", "owner_last_name": "O", "owner_phone": "1", "workspace_name": "Main WS"
+    }, headers=owner_data["headers"])
+    org_id = (await client.get("/api/v1/organizations/memberships", headers=owner_data["headers"])).json()[0]["organization_id"]
+    owner_data["headers"]["X-Organization-Id"] = org_id
+    ws_id = (await client.get("/api/v1/workspaces", headers=owner_data["headers"])).json()[0]["workspace_id"]
+
+    sub_res = await client.post("/api/v1/subjects", json={"workspace_id": ws_id, "subject_name": "Physics"}, headers=owner_data["headers"])
+    subject_id = sub_res.json()["subject_id"]
+
+    # Create assignment
+    c_res = await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "Global Assignment 1"}, headers=owner_data["headers"])
+    assign_id = c_res.json()["assignment_id"]
+
+    # Global listing without subject_id as teacher/owner (sees draft)
+    list_res = await client.get("/api/v1/assignments", headers=owner_data["headers"])
+    assert list_res.status_code == 200
+    data = list_res.json()
+    assert len(data) >= 1
+    assert data[0]["assignment_title"] == "Global Assignment 1"
+    assert data[0]["subject_name"] == "Physics"
+    assert data[0]["workspace_name"] == "Main WS"
+
+    # Add student user
+    student_data = await _create_user_and_login(client, user_service, "global_student@test.com", "Student")
+    roles_res = await client.get("/api/v1/organizations/roles", headers=owner_data["headers"])
+    student_role_id = next(r["role_id"] for r in roles_res.json() if r["role_name"] == "Student")
+
+    await client.post("/api/v1/organizations/members", json={
+        "email": "global_student@test.com", "first_name": "S", "last_name": "U", "role_id": student_role_id, "workspace_ids": [ws_id]
+    }, headers=owner_data["headers"])
+    student_data["headers"]["X-Organization-Id"] = org_id
+
+    # 1. Student global listing when assignment is DRAFT -> empty list
+    student_list1 = await client.get("/api/v1/assignments", headers=student_data["headers"])
+    assert student_list1.status_code == 200
+    assert len(student_list1.json()) == 0
+
+    # 2. Publish assignment
+    await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])
+
+    # 3. Student global listing when assignment is PUBLISHED -> sees assignment
+    student_list2 = await client.get("/api/v1/assignments", headers=student_data["headers"])
+    assert student_list2.status_code == 200
+    s_data = student_list2.json()
+    assert len(s_data) == 1
+    assert s_data[0]["assignment_title"] == "Global Assignment 1"
+    assert s_data[0]["subject_name"] == "Physics"
+    assert s_data[0]["workspace_name"] == "Main WS"
+    assert s_data[0]["student_submission"] is None
+
