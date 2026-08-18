@@ -36,7 +36,9 @@ router = APIRouter()
 @router.get("", response_model=List[AssignmentResponse])
 async def list_assignments(
     subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional for global view)"),
+    workspace_id: Optional[uuid.UUID] = Query(None, description="Workspace ID (optional)"),
     status: Optional[AssignmentStatus] = Query(None, description="Filter assignments by status"),
+    search: Optional[str] = Query(None, description="Search assignments by title, description, or subject name"),
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -48,9 +50,11 @@ async def list_assignments(
     return await service.list_assignments(
         org_id=org.organization_id,
         subject_id=subject_id,
+        workspace_id=workspace_id,
         requesting_user_id=current_user.user_id,
         is_org_admin=is_org_admin,
-        status_filter=status
+        status_filter=status,
+        search=search
     )
 
 
@@ -167,7 +171,8 @@ async def close_assignment(
     return res
 
 
-@router.delete("/{assignment_id}", response_model=AssignmentResponse)
+@router.delete("/{assignment_id}")
+@router.post("/{assignment_id}/archive")
 async def delete_assignment(
     assignment_id: uuid.UUID,
     subject_id: Optional[uuid.UUID] = Query(None, description="Subject ID (optional)"),
@@ -176,10 +181,10 @@ async def delete_assignment(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(AssignmentPermission.DELETE))
 ):
-    """Soft-delete (archive) an assignment."""
+    """Permanently delete an assignment, its reference files, and all student submissions."""
     service = AssignmentService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
-    res = await service.archive_assignment(
+    await service.delete_assignment(
         org_id=org.organization_id,
         assignment_id=assignment_id,
         requesting_user_id=current_user.user_id,
@@ -187,7 +192,7 @@ async def delete_assignment(
         subject_id=subject_id
     )
     await db.commit()
-    return res
+    return {"message": "Assignment deleted successfully", "assignment_id": str(assignment_id)}
 
 
 # ── Teacher Assignment Attachment Endpoints ─────────────────────

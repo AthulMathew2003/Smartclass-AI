@@ -8,6 +8,7 @@ import {
   updateAssignment,
   publishAssignment,
   closeAssignment,
+  deleteAssignment,
   archiveAssignment,
   fetchAssignmentAttachments,
   requestAssignmentAttachmentUploadUrl,
@@ -149,14 +150,14 @@ export default function AssignmentDetailPage() {
     }
   };
 
-  const handleArchive = async () => {
+  const handleDeleteAssignment = async () => {
     if (!assignment) return;
-    if (!confirm("Are you sure you want to archive (delete) this assignment?")) return;
+    if (!confirm("Are you sure you want to permanently delete this assignment? All associated files and student submissions will be deleted.")) return;
     try {
-      await archiveAssignment(assignment.assignment_id);
+      await deleteAssignment(assignment.assignment_id);
       router.push("/classroom/assignments");
     } catch (err: any) {
-      alert(err?.message || "Failed to archive assignment.");
+      alert(err?.message || "Failed to delete assignment.");
     }
   };
 
@@ -478,9 +479,9 @@ export default function AssignmentDetailPage() {
                   Edit
                 </Button>
               )}
-              <Button onClick={handleArchive} variant="destructive" className="font-bold gap-1.5 cursor-pointer">
+              <Button onClick={handleDeleteAssignment} variant="destructive" className="font-bold gap-1.5 cursor-pointer">
                 <span className="material-symbols-outlined text-[18px]">delete</span>
-                Archive
+                Delete Assignment
               </Button>
             </div>
           )}

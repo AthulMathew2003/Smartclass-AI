@@ -25,6 +25,16 @@ class AssignmentCreateRequest(BaseModel):
             raise ValidationException("Assignment title must be 255 characters or fewer.")
         return trimmed
 
+    @field_validator("assignment_description")
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            trimmed = v.strip()
+            if len(trimmed) > 10000:
+                raise ValidationException("Assignment description must be 10000 characters or fewer.")
+            return trimmed if trimmed else None
+        return None
+
     @field_validator("assignment_due_at")
     @classmethod
     def validate_due_at(cls, v: Optional[datetime]) -> Optional[datetime]:
@@ -55,6 +65,16 @@ class AssignmentUpdateRequest(BaseModel):
                 raise ValidationException("Assignment title must be 255 characters or fewer.")
             return trimmed
         return v
+
+    @field_validator("assignment_description")
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            trimmed = v.strip()
+            if len(trimmed) > 10000:
+                raise ValidationException("Assignment description must be 10000 characters or fewer.")
+            return trimmed if trimmed else None
+        return None
 
     @field_validator("assignment_due_at")
     @classmethod

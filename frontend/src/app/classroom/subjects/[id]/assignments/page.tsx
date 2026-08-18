@@ -354,9 +354,7 @@ export default function SubjectAssignmentsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredAssignments.map((assignment) => {
             const dueInfo = formatDueDate(assignment.assignment_due_at);
-            const detailUrl = workspaceIdFromQuery
-              ? `/classroom/subjects/${id}/assignments/${assignment.assignment_id}?workspace_id=${workspaceIdFromQuery}`
-              : `/classroom/subjects/${id}/assignments/${assignment.assignment_id}`;
+            const detailUrl = `/classroom/assignments/${assignment.assignment_id}?subject_id=${id}${workspaceIdFromQuery ? `&workspace_id=${workspaceIdFromQuery}` : ""}`;
 
             return (
               <div

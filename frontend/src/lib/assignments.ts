@@ -101,18 +101,32 @@ export interface SubmissionFileUploadUrlResponse {
   expires_in: number;
 }
 
-// ── Assignment CRUD Operations ──────────────────────────────────
+export interface FetchAssignmentsOptions {
+  subjectId?: string;
+  workspaceId?: string;
+  status?: AssignmentStatus | "all";
+  search?: string;
+}
 
 export async function fetchAssignments(
-  subjectId?: string,
+  optionsOrSubjectId?: string | FetchAssignmentsOptions,
   status?: AssignmentStatus | "all"
 ): Promise<Assignment[]> {
   const params = new URLSearchParams();
-  if (subjectId) {
-    params.append("subject_id", subjectId);
-  }
-  if (status && status !== "all") {
-    params.append("status", status);
+  if (typeof optionsOrSubjectId === "object" && optionsOrSubjectId !== null) {
+    if (optionsOrSubjectId.subjectId) params.append("subject_id", optionsOrSubjectId.subjectId);
+    if (optionsOrSubjectId.workspaceId) params.append("workspace_id", optionsOrSubjectId.workspaceId);
+    if (optionsOrSubjectId.status && optionsOrSubjectId.status !== "all") {
+      params.append("status", optionsOrSubjectId.status);
+    }
+    if (optionsOrSubjectId.search) params.append("search", optionsOrSubjectId.search.trim());
+  } else {
+    if (optionsOrSubjectId) {
+      params.append("subject_id", optionsOrSubjectId);
+    }
+    if (status && status !== "all") {
+      params.append("status", status);
+    }
   }
   const queryStr = params.toString() ? `?${params.toString()}` : "";
   return await apiFetch<Assignment[]>(`/assignments${queryStr}`);
@@ -196,18 +210,20 @@ export async function closeAssignment(
   );
 }
 
-export async function archiveAssignment(
+export async function deleteAssignment(
   assignmentId: string,
   subjectId?: string
-): Promise<Assignment> {
+): Promise<{ message: string; assignment_id: string }> {
   const queryStr = subjectId ? `?subject_id=${encodeURIComponent(subjectId)}` : "";
-  return await apiFetch<Assignment>(
+  return await apiFetch<{ message: string; assignment_id: string }>(
     `/assignments/${encodeURIComponent(assignmentId)}${queryStr}`,
     {
       method: "DELETE",
     }
   );
 }
+
+export const archiveAssignment = deleteAssignment;
 
 // ── Assignment Attachments Operations ───────────────────────────
 

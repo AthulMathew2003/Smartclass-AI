@@ -45,8 +45,8 @@ export default function AssignmentsPage() {
   // Filters & Search
   const [search, setSearch] = useState("");
   const [subjectFilter, setSubjectFilter] = useState<string>("all");
-  const [studentTab, setStudentTab] = useState<"all" | "due_soon" | "not_submitted" | "submitted" | "graded" | "overdue">("all");
-  const [teacherTab, setTeacherTab] = useState<"all" | "published" | "draft" | "closed" | "archived">("all");
+  const [studentTab, setStudentTab] = useState<"all" | "pending" | "submitted" | "due_soon" | "completed">("all");
+  const [teacherTab, setTeacherTab] = useState<"all" | "draft" | "published" | "due_soon" | "needs_grading" | "closed">("all");
 
   // Create Assignment Modal State
   const [createOpen, setCreateOpen] = useState(false);
@@ -109,20 +109,18 @@ export default function AssignmentsPage() {
   }, [isTeacherOrAdmin]);
 
   useEffect(() => {
-    if (permLoaded && orgId) {
-      loadData();
-    }
-  }, [permLoaded, orgId, loadData]);
+    loadData();
+  }, [loadData]);
 
   // Handle Create Assignment
   const handleCreateAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!createSubjectId) {
-      setCreateError("Please select a subject.");
-      return;
-    }
     if (!createTitle.trim()) {
       setCreateError("Assignment title is required.");
+      return;
+    }
+    if (!createSubjectId) {
+      setCreateError("Please select a subject.");
       return;
     }
 
@@ -170,25 +168,29 @@ export default function AssignmentsPage() {
         return false;
       }
 
+      const now = new Date();
+      const dueDate = a.assignment_due_at ? new Date(a.assignment_due_at) : null;
+      const isDueSoon = dueDate ? dueDate > now && (dueDate.getTime() - now.getTime()) <= 3 * 86400 * 1000 : false;
+
       // Role-specific Tab Filtering
       if (isTeacherOrAdmin) {
-        if (teacherTab !== "all" && a.assignment_status !== teacherTab) {
-          return false;
+        if (teacherTab === "draft" && a.assignment_status !== "draft") return false;
+        if (teacherTab === "published" && a.assignment_status !== "published") return false;
+        if (teacherTab === "closed" && a.assignment_status !== "closed") return false;
+        if (teacherTab === "due_soon" && (a.assignment_status !== "published" || !isDueSoon)) return false;
+        if (teacherTab === "needs_grading") {
+          const pending = (a.pending_count ?? 0) > 0;
+          if (!pending) return false;
         }
       } else {
         // Student Tabs
-        const now = new Date();
         const hasSub = !!a.student_submission && a.student_submission.submission_status !== "draft";
         const subStatus = a.student_submission?.submission_status;
-        const dueDate = a.assignment_due_at ? new Date(a.assignment_due_at) : null;
-        const isOverdue = dueDate ? now > dueDate && !hasSub : false;
-        const isDueSoon = dueDate ? dueDate > now && (dueDate.getTime() - now.getTime()) <= 3 * 86400 * 1000 : false;
 
-        if (studentTab === "due_soon" && !isDueSoon) return false;
-        if (studentTab === "not_submitted" && hasSub) return false;
-        if (studentTab === "submitted" && (!hasSub || subStatus === "graded")) return false;
-        if (studentTab === "graded" && subStatus !== "graded") return false;
-        if (studentTab === "overdue" && !isOverdue) return false;
+        if (studentTab === "pending" && hasSub) return false;
+        if (studentTab === "due_soon" && (!isDueSoon || hasSub)) return false;
+        if (studentTab === "submitted" && (!hasSub || subStatus === "graded" || subStatus === "returned")) return false;
+        if (studentTab === "completed" && (subStatus !== "graded" && subStatus !== "returned")) return false;
       }
 
       return true;
@@ -282,11 +284,12 @@ export default function AssignmentsPage() {
               <>
                 {(
                   [
-                    { key: "all", label: "All Assignments" },
+                    { key: "all", label: "All" },
+                    { key: "draft", label: "Draft" },
                     { key: "published", label: "Published" },
-                    { key: "draft", label: "Drafts" },
+                    { key: "due_soon", label: "Due Soon" },
+                    { key: "needs_grading", label: "Needs Grading" },
                     { key: "closed", label: "Closed" },
-                    { key: "archived", label: "Archived" },
                   ] as const
                 ).map((tab) => (
                   <button
@@ -307,11 +310,10 @@ export default function AssignmentsPage() {
                 {(
                   [
                     { key: "all", label: "All" },
-                    { key: "due_soon", label: "Due Soon" },
-                    { key: "not_submitted", label: "Not Submitted" },
+                    { key: "pending", label: "Pending" },
                     { key: "submitted", label: "Submitted" },
-                    { key: "graded", label: "Graded" },
-                    { key: "overdue", label: "Overdue" },
+                    { key: "due_soon", label: "Due Soon" },
+                    { key: "completed", label: "Completed" },
                   ] as const
                 ).map((tab) => (
                   <button

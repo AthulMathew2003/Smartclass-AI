@@ -222,6 +222,22 @@ async def test_student_submission_resubmission_and_grading_flow(client: AsyncCli
     att2_id = file2_upload_data["attachment_id"]
     s3_key2 = file2_upload_data["s3_key"]
 
+    # Attempting to submit with an invalid S3 key (wrong prefix or path traversal) -> 400 / 422
+    bad_s3_res = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submit",
+        json={
+            "files": [{
+                "attachment_id": str(uuid.uuid4()),
+                "s3_key": "submissions/arbitrary/path/hack.pdf",
+                "original_filename": "hack.pdf",
+                "content_type": "application/pdf",
+                "file_size": 1024
+            }]
+        },
+        headers=student_data["headers"]
+    )
+    assert bad_s3_res.status_code in (400, 422)
+
     resubmit_res = await client.post(
         f"/api/v1/assignments/{assignment_id}/submit",
         json={
@@ -271,7 +287,60 @@ async def test_student_submission_resubmission_and_grading_flow(client: AsyncCli
     assert regrade_res.json()["submission_grade"] == 98.0
     assert regrade_res.json()["submission_status"] == "graded"
 
-    # 11. Teacher closes assignment
+    # 11. Teacher returns submission
+    return_res = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/{submission_id}/return",
+        json={"feedback": "Returned for optional revision."},
+        headers=teacher_data["headers"]
+    )
+    assert return_res.status_code == 200
+    return_data = return_res.json()
+    assert return_data["submission_status"] == "returned"
+    assert return_data["submission_grade"] == 98.0
+    assert return_data["submission_feedback"] == "Returned for optional revision."
+
+    # Student cannot grade or return
+    bad_grade_student = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/{submission_id}/grade",
+        json={"grade": 100.0},
+        headers=student_data["headers"]
+    )
+    assert bad_grade_student.status_code == 403
+
+    # Grade validation tests (out of bounds)
+    bad_grade_high = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/{submission_id}/grade",
+        json={"grade": 105.0},
+        headers=teacher_data["headers"]
+    )
+    assert bad_grade_high.status_code in (400, 422)
+
+    bad_grade_low = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/{submission_id}/grade",
+        json={"grade": -5.0},
+        headers=teacher_data["headers"]
+    )
+    assert bad_grade_low.status_code in (400, 422)
+
+    # 12. Security & IDOR checks
+    # Random submission ID -> 404
+    fake_sub_id = uuid.uuid4()
+    not_found_grade = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submissions/{fake_sub_id}/grade",
+        json={"grade": 90.0},
+        headers=teacher_data["headers"]
+    )
+    assert not_found_grade.status_code == 404
+
+    # Fake attachment download -> 404
+    fake_att_id = uuid.uuid4()
+    not_found_dl = await client.get(
+        f"/api/v1/assignments/{assignment_id}/submission/files/{fake_att_id}/download-url",
+        headers=student_data["headers"]
+    )
+    assert not_found_dl.status_code == 404
+
+    # 13. Teacher closes assignment
     await client.post(f"/api/v1/assignments/{assignment_id}/close?subject_id={subject_id}", headers=teacher_data["headers"])
 
     # Student cannot submit to closed assignment -> 409
@@ -281,3 +350,99 @@ async def test_student_submission_resubmission_and_grading_flow(client: AsyncCli
         headers=student_data["headers"]
     )
     assert closed_sub.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_late_submission_status(client: AsyncClient, db_session, monkeypatch):
+    user_service = UserService(db_session)
+    owner_data = await _create_user_and_login(client, user_service, "late_owner@test.com", "Owner")
+    teacher_data = await _create_user_and_login(client, user_service, "late_teacher@test.com", "Teacher")
+    student_data = await _create_user_and_login(client, user_service, "late_student@test.com", "Student")
+    await db_session.commit()
+
+    # Onboard
+    await client.post("/api/v1/organizations/onboarding", json={
+        "org_name": "Late Academy",
+        "org_slug": "late-academy",
+        "org_type": "School",
+        "org_country": "US",
+        "org_state": "CA",
+        "org_city": "SF",
+        "org_timezone": "America/Los_Angeles",
+        "owner_first_name": "Owner",
+        "owner_last_name": "User",
+        "owner_phone": "1234567890",
+        "workspace_name": "Grade 12"
+    }, headers=owner_data["headers"])
+    await db_session.commit()
+
+    org_res = await client.get("/api/v1/organizations/memberships", headers=owner_data["headers"])
+    org_id = org_res.json()[0]["organization_id"]
+    owner_data["headers"]["X-Organization-Id"] = org_id
+    teacher_data["headers"]["X-Organization-Id"] = org_id
+    student_data["headers"]["X-Organization-Id"] = org_id
+
+    ws_res = await client.get("/api/v1/workspaces", headers=owner_data["headers"])
+    workspace_id = ws_res.json()[0]["workspace_id"]
+
+    roles_res = await client.get("/api/v1/organizations/roles", headers=owner_data["headers"])
+    roles_data = roles_res.json()
+    teacher_role_id = next(r["role_id"] for r in roles_data if r["role_name"] == "Teacher")
+    student_role_id = next(r["role_id"] for r in roles_data if r["role_name"] == "Student")
+
+    await client.post("/api/v1/organizations/members", json={
+        "email": "late_teacher@test.com",
+        "first_name": "Teacher",
+        "last_name": "User",
+        "role_id": teacher_role_id,
+        "workspace_ids": [workspace_id]
+    }, headers=owner_data["headers"])
+    await client.post("/api/v1/organizations/members", json={
+        "email": "late_student@test.com",
+        "first_name": "Student",
+        "last_name": "User",
+        "role_id": student_role_id,
+        "workspace_ids": [workspace_id]
+    }, headers=owner_data["headers"])
+
+    sub_res = await client.post("/api/v1/subjects", json={
+        "workspace_id": workspace_id,
+        "subject_name": "Physics",
+        "subject_description": "Mechanics."
+    }, headers=owner_data["headers"])
+    subject_id = sub_res.json()["subject_id"]
+
+    await client.post(
+        f"/api/v1/subjects/{subject_id}/teachers?workspace_id={workspace_id}",
+        json={"user_id": str(teacher_data["user"].user_id)},
+        headers=owner_data["headers"]
+    )
+
+    # Create assignment with valid future due date
+    future_due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    create_res = await client.post("/api/v1/assignments", json={
+        "subject_id": subject_id,
+        "title": "Lab Report 1",
+        "description": "Due tomorrow.",
+        "due_at": future_due
+    }, headers=teacher_data["headers"])
+    assert create_res.status_code == 201
+    assignment_id = create_res.json()["assignment_id"]
+
+    await client.post(f"/api/v1/assignments/{assignment_id}/publish?subject_id={subject_id}", headers=teacher_data["headers"])
+
+    # Simulate past due date in DB
+    from app.modules.assignments.models import Assignment
+    assign_obj = await db_session.get(Assignment, uuid.UUID(assignment_id))
+    assign_obj.assignment_due_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    db_session.add(assign_obj)
+    await db_session.commit()
+
+    # Student submits after due date -> status should be 'late'
+    submit_res = await client.post(
+        f"/api/v1/assignments/{assignment_id}/submit",
+        json={"files": []},
+        headers=student_data["headers"]
+    )
+    assert submit_res.status_code == 200
+    assert submit_res.json()["submission_status"] == "late"

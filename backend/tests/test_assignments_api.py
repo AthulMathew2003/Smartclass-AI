@@ -135,19 +135,19 @@ async def test_assignment_crud_and_lifecycle_transitions(client: AsyncClient, db
     bad_pub = await client.post(f"/api/v1/assignments/{assignment_id}/publish?subject_id={subject_id}", headers=teacher_data["headers"])
     assert bad_pub.status_code == 409
 
-    # 6. Archive Assignment (CLOSED -> ARCHIVED)
-    archive_res = await client.delete(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", headers=teacher_data["headers"])
-    assert archive_res.status_code == 200
-    assert archive_res.json()["assignment_status"] == "archived"
+    # 6. Hard Delete Assignment
+    delete_res = await client.delete(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", headers=teacher_data["headers"])
+    assert delete_res.status_code == 200
+    assert delete_res.json()["message"] == "Assignment deleted successfully"
 
-    # Cannot re-archive already archived assignment -> 409
-    dup_archive = await client.delete(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", headers=teacher_data["headers"])
-    assert dup_archive.status_code == 409
+    # Verifying assignment no longer exists -> 404
+    get_res = await client.get(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", headers=teacher_data["headers"])
+    assert get_res.status_code == 404
 
-    # Cannot mutate, publish, or close archived assignment -> 409
-    assert (await client.patch(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", json={"title": "Test"}, headers=teacher_data["headers"])).status_code == 409
-    assert (await client.post(f"/api/v1/assignments/{assignment_id}/publish?subject_id={subject_id}", headers=teacher_data["headers"])).status_code == 409
-    assert (await client.post(f"/api/v1/assignments/{assignment_id}/close?subject_id={subject_id}", headers=teacher_data["headers"])).status_code == 409
+    # Cannot mutate, publish, or close deleted assignment -> 404
+    assert (await client.patch(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", json={"title": "Test"}, headers=teacher_data["headers"])).status_code == 404
+    assert (await client.post(f"/api/v1/assignments/{assignment_id}/publish?subject_id={subject_id}", headers=teacher_data["headers"])).status_code == 404
+    assert (await client.post(f"/api/v1/assignments/{assignment_id}/close?subject_id={subject_id}", headers=teacher_data["headers"])).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -279,9 +279,9 @@ async def test_student_visibility_and_status_filtering(client: AsyncClient, db_s
     await client.delete(f"/api/v1/assignments/{a_id}?subject_id={subject_id}", headers=teacher_data["headers"])
 
     # ── Teacher View ──
-    # Default list -> includes all 4
+    # Default list -> includes 3 active assignments (draft, published, closed) since a_id was hard deleted
     t_all = (await client.get(f"/api/v1/assignments?subject_id={subject_id}", headers=teacher_data["headers"])).json()
-    assert len(t_all) == 4
+    assert len(t_all) == 3
 
     # Teacher filter by draft -> 1
     t_drafts = (await client.get(f"/api/v1/assignments?subject_id={subject_id}&status=draft", headers=teacher_data["headers"])).json()
@@ -385,6 +385,9 @@ async def test_assignment_validation_rules(client: AsyncClient, db_session):
     # 2. Oversized title (>255 chars) rejected
     assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "A" * 256}, headers=owner_data["headers"])).status_code in (400, 422)
 
+    # Oversized description (>10000 chars) rejected
+    assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "Big Desc", "description": "D" * 10001}, headers=owner_data["headers"])).status_code in (400, 422)
+
     # 3. Past due date rejected on creation -> 400 / 422
     assert (await client.post("/api/v1/assignments", json={"subject_id": subject_id, "title": "Past Assignment", "due_at": "2020-01-01T00:00:00Z"}, headers=owner_data["headers"])).status_code in (400, 422)
 
@@ -400,14 +403,34 @@ async def test_assignment_validation_rules(client: AsyncClient, db_session):
     pub_res = await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])
     assert pub_res.status_code == 200
 
+    # Publish an already published assignment -> 409
+    assert (await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 409
+
     # 7. Update published assignment with past due date rejected
     assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"due_at": "2020-01-01T00:00:00Z"}, headers=owner_data["headers"])).status_code in (400, 422)
 
     # 8. Close assignment
     await client.post(f"/api/v1/assignments/{assign_id}/close?subject_id={subject_id}", headers=owner_data["headers"])
 
+    # Publish a closed assignment -> 409
+    assert (await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 409
+
+    # Close an already closed assignment -> 409
+    assert (await client.post(f"/api/v1/assignments/{assign_id}/close?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 409
+
     # 9. Closed assignment cannot be edited -> 409
     assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"title": "New Title"}, headers=owner_data["headers"])).status_code == 409
+
+    # 10. Hard Delete assignment
+    delete_res = await client.delete(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", headers=owner_data["headers"])
+    assert delete_res.status_code == 200
+    assert delete_res.json()["message"] == "Assignment deleted successfully"
+
+    # Deleted assignment no longer exists -> 404
+    assert (await client.get(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 404
+    assert (await client.patch(f"/api/v1/assignments/{assign_id}?subject_id={subject_id}", json={"title": "Archived Title"}, headers=owner_data["headers"])).status_code == 404
+    assert (await client.post(f"/api/v1/assignments/{assign_id}/publish?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 404
+    assert (await client.post(f"/api/v1/assignments/{assign_id}/close?subject_id={subject_id}", headers=owner_data["headers"])).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -468,4 +491,32 @@ async def test_global_assignment_listing(client: AsyncClient, db_session):
     assert s_data[0]["subject_name"] == "Physics"
     assert s_data[0]["workspace_name"] == "Main WS"
     assert s_data[0]["student_submission"] is None
+
+    # 4. Search filter test
+    search_hit = await client.get("/api/v1/assignments?search=Global", headers=student_data["headers"])
+    assert search_hit.status_code == 200
+    assert len(search_hit.json()) == 1
+
+    search_miss = await client.get("/api/v1/assignments?search=NonExistentTermXYZ", headers=student_data["headers"])
+    assert search_miss.status_code == 200
+    assert len(search_miss.json()) == 0
+
+    # 5. Workspace filter test
+    ws_hit = await client.get(f"/api/v1/assignments?workspace_id={ws_id}", headers=student_data["headers"])
+    assert ws_hit.status_code == 200
+    assert len(ws_hit.json()) == 1
+
+    random_ws_id = uuid.uuid4()
+    ws_miss = await client.get(f"/api/v1/assignments?workspace_id={random_ws_id}", headers=student_data["headers"])
+    assert ws_miss.status_code == 200
+    assert len(ws_miss.json()) == 0
+
+    # 6. Status filter test
+    status_published = await client.get("/api/v1/assignments?status=published", headers=student_data["headers"])
+    assert status_published.status_code == 200
+    assert len(status_published.json()) == 1
+
+    status_closed = await client.get("/api/v1/assignments?status=closed", headers=student_data["headers"])
+    assert status_closed.status_code == 200
+    assert len(status_closed.json()) == 0
 

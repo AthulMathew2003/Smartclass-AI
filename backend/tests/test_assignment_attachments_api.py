@@ -275,15 +275,15 @@ async def test_closed_and_archived_attachment_protections(client: AsyncClient, d
         headers=teacher_data["headers"]
     )).status_code == 409
 
-    # 2. Archive Assignment
+    # 2. Delete Assignment (Hard Delete)
     await client.delete(f"/api/v1/assignments/{assignment_id}?subject_id={subject_id}", headers=teacher_data["headers"])
 
-    # Adding attachments to ARCHIVED assignment is rejected -> 409
+    # Adding attachments to DELETED assignment returns -> 404 Not Found
     assert (await client.post(
         f"/api/v1/assignments/{assignment_id}/attachments/upload-url?subject_id={subject_id}",
         json={"filename": "new.pdf", "content_type": "application/pdf", "file_size": 1024},
         headers=teacher_data["headers"]
-    )).status_code == 409
+    )).status_code == 404
 
 
 @pytest.mark.asyncio

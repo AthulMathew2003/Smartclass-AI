@@ -199,7 +199,9 @@ class AssignmentService:
         requesting_user_id: uuid.UUID,
         is_org_admin: bool,
         subject_id: Optional[uuid.UUID] = None,
-        status_filter: Optional[AssignmentStatus] = None
+        workspace_id: Optional[uuid.UUID] = None,
+        status_filter: Optional[AssignmentStatus] = None,
+        search: Optional[str] = None
     ) -> List[AssignmentResponse]:
         """
         List accessible assignments.
@@ -217,7 +219,8 @@ class AssignmentService:
                 subject_id=subject.subject_id,
                 status_filter=status_filter,
                 include_drafts=is_teacher,
-                include_archived=is_teacher
+                include_archived=is_teacher,
+                search=search
             )
 
             responses = []
@@ -251,13 +254,17 @@ class AssignmentService:
                 org_id=org_id,
                 user_id=requesting_user_id,
                 is_org_admin=is_org_admin,
-                status_filter=status_filter
+                status_filter=status_filter,
+                workspace_id=workspace_id,
+                search=search
             )
         else:
             assignments = await self.repo.list_global_assignments_for_student(
                 org_id=org_id,
                 user_id=requesting_user_id,
-                status_filter=status_filter
+                status_filter=status_filter,
+                workspace_id=workspace_id,
+                search=search
             )
 
         responses = []
@@ -454,6 +461,52 @@ class AssignmentService:
 
         closed = await self.repo.set_assignment_status(assignment, AssignmentStatus.CLOSED)
         return AssignmentResponse.model_validate(closed)
+
+    async def delete_assignment(
+        self,
+        org_id: uuid.UUID,
+        assignment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool,
+        subject_id: Optional[uuid.UUID] = None
+    ) -> None:
+        """Permanently delete (hard delete) an assignment, its S3 files, and all associated submissions."""
+        assignment, subject, workspace = await self._verify_assignment_hierarchy(
+            assignment_id,
+            org_id,
+            allow_archived_parent=True
+        )
+        if subject_id is not None and subject.subject_id != subject_id:
+            raise NotFoundException("Assignment not found for the specified subject.")
+
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        # 1. Delete all assignment reference files in S3
+        attachments = await self.repo.list_attachments_by_assignment(assignment.assignment_id)
+        for att in attachments:
+            try:
+                self.storage.delete_object(att.attachment_s3_key)
+            except Exception:
+                pass
+
+        # 2. Delete all submission files in S3
+        submissions = await self.repo.list_submissions_by_assignment(assignment.assignment_id)
+        for sub in submissions:
+            if sub.attachments:
+                for sub_att in sub.attachments:
+                    try:
+                        self.storage.delete_object(sub_att.attachment_s3_key)
+                    except Exception:
+                        pass
+
+        # 3. Hard delete from database
+        await self.repo.delete_assignment(assignment)
 
     async def archive_assignment(
         self,
@@ -749,7 +802,7 @@ class AssignmentService:
                 validate_attachment_request(f.content_type, f.file_size, f.original_filename)
                 clean_name = sanitize_filename(f.original_filename)
                 expected_prefix = f"submissions/{assignment.assignment_id}/{student_id}/"
-                if not f.s3_key.startswith(expected_prefix) and not f.s3_key.startswith("submissions/"):
+                if not f.s3_key.startswith(expected_prefix):
                     raise ValidationException("Invalid S3 key for this submission.")
 
                 if not self.storage.object_exists(f.s3_key):

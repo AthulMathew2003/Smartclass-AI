@@ -70,13 +70,16 @@ class AssignmentRepository:
         self,
         subject_id: uuid.UUID,
         status_filter: Optional[AssignmentStatus] = None,
-        include_drafts: bool = True,
-        include_archived: bool = False
+        include_drafts: bool = False,
+        include_archived: bool = False,
+        search: Optional[str] = None
     ) -> List[Assignment]:
         stmt = (
             select(Assignment)
             .where(Assignment.assignment_subject_id == subject_id)
-            .options(selectinload(Assignment.subject))
+            .options(
+                selectinload(Assignment.subject).selectinload(Subject.workspace)
+            )
         )
 
         if status_filter is not None:
@@ -90,6 +93,15 @@ class AssignmentRepository:
                 stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.DRAFT)
             if not include_archived:
                 stmt = stmt.where(Assignment.assignment_status != AssignmentStatus.ARCHIVED)
+
+        if search:
+            search_term = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Assignment.assignment_title).like(search_term),
+                    func.lower(func.coalesce(Assignment.assignment_description, "")).like(search_term)
+                )
+            )
 
         stmt = stmt.order_by(Assignment.assignment_created_at.desc())
         result = await self.db.execute(stmt)
@@ -123,6 +135,11 @@ class AssignmentRepository:
         await self.db.flush()
         return assignment
 
+    async def delete_assignment(self, assignment: Assignment) -> None:
+        """Permanently delete assignment from database."""
+        await self.db.delete(assignment)
+        await self.db.flush()
+
     async def archive_assignment(self, assignment: Assignment) -> Assignment:
         assignment.assignment_status = AssignmentStatus.ARCHIVED
         self.db.add(assignment)
@@ -136,7 +153,9 @@ class AssignmentRepository:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
         is_org_admin: bool,
-        status_filter: Optional[AssignmentStatus] = None
+        status_filter: Optional[AssignmentStatus] = None,
+        workspace_id: Optional[uuid.UUID] = None,
+        search: Optional[str] = None
     ) -> List[Assignment]:
         """
         List all assignments accessible to an Admin or Teacher across an organization.
@@ -167,8 +186,21 @@ class AssignmentRepository:
             )
             stmt = stmt.where(is_teacher_subquery)
 
+        if workspace_id is not None:
+            stmt = stmt.where(Workspace.workspace_id == workspace_id)
+
         if status_filter is not None:
             stmt = stmt.where(Assignment.assignment_status == status_filter)
+
+        if search:
+            search_term = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Assignment.assignment_title).like(search_term),
+                    func.lower(func.coalesce(Assignment.assignment_description, "")).like(search_term),
+                    func.lower(Subject.subject_name).like(search_term)
+                )
+            )
 
         stmt = stmt.order_by(Assignment.assignment_created_at.desc())
         result = await self.db.execute(stmt)
@@ -178,7 +210,9 @@ class AssignmentRepository:
         self,
         org_id: uuid.UUID,
         user_id: uuid.UUID,
-        status_filter: Optional[AssignmentStatus] = None
+        status_filter: Optional[AssignmentStatus] = None,
+        workspace_id: Optional[uuid.UUID] = None,
+        search: Optional[str] = None
     ) -> List[Assignment]:
         """
         List all published and closed assignments for a student across all their enrolled workspaces.
@@ -214,11 +248,24 @@ class AssignmentRepository:
             )
         )
 
+        if workspace_id is not None:
+            stmt = stmt.where(Workspace.workspace_id == workspace_id)
+
         if status_filter is not None:
             if status_filter in (AssignmentStatus.PUBLISHED, AssignmentStatus.CLOSED):
                 stmt = stmt.where(Assignment.assignment_status == status_filter)
             else:
                 return []
+
+        if search:
+            search_term = f"%{search.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Assignment.assignment_title).like(search_term),
+                    func.lower(func.coalesce(Assignment.assignment_description, "")).like(search_term),
+                    func.lower(Subject.subject_name).like(search_term)
+                )
+            )
 
         stmt = stmt.order_by(Assignment.assignment_due_at.asc().nulls_last(), Assignment.assignment_created_at.desc())
         result = await self.db.execute(stmt)

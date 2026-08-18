@@ -104,7 +104,7 @@ export default function Sidebar({ status }: { status: OnboardingStatusResponse |
       {/* Navigation — permission-aware */}
       <nav className={`flex-1 space-y-1 mt-2 ${collapsed ? "px-2" : "px-3"}`}>
         {visibleItems.map((item) => {
-          const isActive = pathname === item.href;
+          const isActive = pathname === item.href || (item.href !== "/classroom" && pathname.startsWith(item.href));
           return (
             <Link
               key={item.name}
