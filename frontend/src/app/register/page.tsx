@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { registerWithPassword, getGoogleOAuthUrl, getGitHubOAuthUrl, API_BASE_URL } from "../../lib/auth";
@@ -26,68 +26,190 @@ const features = [
   { icon: "workspaces", text: "Isolated workspaces per organization" },
 ];
 
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+const NAME_REGEX = /^[a-zA-Z\s.'-]+$/;
+
 export default function RegisterPage() {
   const router = useRouter();
-  const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
+  // Form fields
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [terms, setTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  // Field touched states for progressive validation
+  const [touched, setTouched] = useState({
+    fullName: false,
+    email: false,
+    password: false,
+    terms: false,
+  });
+
+  // Email availability & check status
   const [emailAvailable, setEmailAvailable] = useState<boolean | null>(null);
-  const [strength, setStrength] = useState(0);
-  const [strengthLabel, setStrengthLabel] = useState("Too short");
+  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
 
-  useEffect(() => { setIsClient(true); }, []);
+  // ── Validation Rules ──────────────────────────────────────────
+  const fullNameError = useMemo(() => {
+    const trimmed = fullName.trim();
+    if (!trimmed) return "Full name is required.";
+    if (trimmed.length < 2) return "Full name must be at least 2 characters.";
+    if (trimmed.length > 100) return "Full name cannot exceed 100 characters.";
+    if (!NAME_REGEX.test(trimmed)) return "Name can only contain letters, spaces, hyphens, and dots.";
+    return null;
+  }, [fullName]);
 
-  // Debounced email check
-  useEffect(() => {
-    if (!email || !email.includes("@")) { setEmailAvailable(null); return; }
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/auth/check-email?email=${encodeURIComponent(email)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setEmailAvailable(data.available);
-          if (!data.available) setError("This email is already associated with an account.");
-          else setError(null);
-        }
-      } catch {}
-    }, 450);
-    return () => clearTimeout(timer);
+  const emailFormatError = useMemo(() => {
+    const trimmed = email.trim();
+    if (!trimmed) return "Email address is required.";
+    if (!EMAIL_REGEX.test(trimmed)) return "Please enter a valid email address (e.g. name@domain.com).";
+    return null;
   }, [email]);
 
-  const handlePasswordChange = (val: string) => {
-    setPassword(val);
-    let s = 0;
-    if (val.length > 0) s += 25;
-    if (val.length > 8) s += 25;
-    if (/[A-Z]/.test(val)) s += 25;
-    if (/[0-9]/.test(val) || /[^A-Za-z0-9]/.test(val)) s += 25;
-    setStrength(s);
-    setStrengthLabel(s <= 25 ? "Weak" : s <= 50 ? "Fair" : s <= 75 ? "Good" : "Strong");
+  const emailError = useMemo(() => {
+    if (emailFormatError) return emailFormatError;
+    if (emailAvailable === false) return "This email is already associated with an account.";
+    return null;
+  }, [emailFormatError, emailAvailable]);
+
+  // Password criteria checks
+  const passwordCriteria = useMemo(() => {
+    return {
+      hasMinLength: password.length >= 8,
+      hasMaxLength: password.length <= 100,
+      hasUpper: /[A-Z]/.test(password),
+      hasLower: /[a-z]/.test(password),
+      hasNumberOrSpecial: /[0-9]/.test(password) || /[^A-Za-z0-9]/.test(password),
+    };
+  }, [password]);
+
+  const passwordStrength = useMemo(() => {
+    if (!password) return { score: 0, label: "Too short", color: "#dc2626", percentage: 0 };
+    let score = 0;
+    if (passwordCriteria.hasMinLength) score += 1;
+    if (passwordCriteria.hasUpper) score += 1;
+    if (passwordCriteria.hasLower) score += 1;
+    if (passwordCriteria.hasNumberOrSpecial) score += 1;
+
+    switch (score) {
+      case 1:
+        return { score: 1, label: "Weak", color: "#dc2626", percentage: 25 };
+      case 2:
+        return { score: 2, label: "Fair", color: "#ea580c", percentage: 50 };
+      case 3:
+        return { score: 3, label: "Good", color: "#ca8a04", percentage: 75 };
+      case 4:
+        return { score: 4, label: "Strong", color: "#16a34a", percentage: 100 };
+      default:
+        return { score: 0, label: "Too short", color: "#dc2626", percentage: 10 };
+    }
+  }, [password, passwordCriteria]);
+
+  const passwordError = useMemo(() => {
+    if (!password) return "Password is required.";
+    if (!passwordCriteria.hasMinLength) return "Password must be at least 8 characters long.";
+    if (!passwordCriteria.hasMaxLength) return "Password cannot exceed 100 characters.";
+    if (!passwordCriteria.hasUpper) return "Password must include at least one uppercase letter (A-Z).";
+    if (!passwordCriteria.hasLower) return "Password must include at least one lowercase letter (a-z).";
+    if (!passwordCriteria.hasNumberOrSpecial) return "Password must include at least one number or special character.";
+    return null;
+  }, [password, passwordCriteria]);
+
+  const termsError = useMemo(() => {
+    if (!terms) return "You must agree to the Scholarly Conduct Policy and Terms.";
+    return null;
+  }, [terms]);
+
+  const isFormValid = !fullNameError && !emailError && !passwordError && !termsError && !isCheckingEmail;
+
+  // ── Debounced Email Availability Check ────────────────────────
+  useEffect(() => {
+    const trimmed = email.trim();
+    if (!trimmed || !EMAIL_REGEX.test(trimmed)) {
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      if (!isMounted) return;
+      setIsCheckingEmail(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/auth/check-email?email=${encodeURIComponent(trimmed)}`);
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setEmailAvailable(data.available);
+        } else if (isMounted) {
+          setEmailAvailable(null);
+        }
+      } catch {
+        if (isMounted) setEmailAvailable(null);
+      } finally {
+        if (isMounted) setIsCheckingEmail(false);
+      }
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [email]);
+
+  const handleEmailChange = (val: string) => {
+    setEmail(val);
+    setEmailAvailable(null);
+    setIsCheckingEmail(false);
+    if (formError) setFormError(null);
   };
 
-  const strengthColor = strength <= 25 ? "#dc2626" : strength <= 50 ? "var(--secondary)" : strength <= 75 ? "var(--primary-fixed-dim)" : "var(--primary)";
-
-  if (!isClient) return null;
+  const handleBlur = (field: keyof typeof touched) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!terms) { setError("You must agree to the Terms of Service."); return; }
-    if (emailAvailable === false) { setError("This email is already associated with an account."); return; }
-    setError(null);
+
+    setTouched({
+      fullName: true,
+      email: true,
+      password: true,
+      terms: true,
+    });
+
+    if (!isFormValid) {
+      if (fullNameError) {
+        setFormError(fullNameError);
+      } else if (emailError) {
+        setFormError(emailError);
+      } else if (passwordError) {
+        setFormError(passwordError);
+      } else if (termsError) {
+        setFormError(termsError);
+      }
+      return;
+    }
+
+    setFormError(null);
     setLoading(true);
+
     const parts = fullName.trim().split(/\s+/);
+    const firstName = parts[0] || "";
+    const lastName = parts.slice(1).join(" ") || "";
+
     try {
-      await registerWithPassword({ email, password, first_name: parts[0] || "", last_name: parts.slice(1).join(" ") || "" });
+      await registerWithPassword({
+        email: email.trim(),
+        password,
+        first_name: firstName,
+        last_name: lastName,
+      });
       router.replace("/classroom");
-    } catch (err: any) {
-      setError(err.message || "Registration failed. Please try again.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Registration failed. Please check your information and try again.";
+      setFormError(msg);
     } finally {
       setLoading(false);
     }
@@ -155,101 +277,311 @@ export default function RegisterPage() {
             <p className="text-sm mt-1.5" style={{ color: "var(--on-surface-variant)" }}>Register to begin your collaborative workspace.</p>
           </div>
 
-          {error && (
+          {formError && (
             <div className="mb-5 p-4 rounded-xl flex items-center gap-2.5 text-sm font-medium animate-fade-in" style={{ backgroundColor: "rgba(186,26,26,0.06)", border: "1px solid rgba(186,26,26,0.2)", color: "#ba1a1a" }}>
               <span className="material-symbols-outlined text-[18px]">error</span>
-              <span>{error}</span>
+              <span>{formError}</span>
             </div>
           )}
 
-          <form className="space-y-4" onSubmit={handleSubmit}>
+          <form className="space-y-4" onSubmit={handleSubmit} noValidate>
+            {/* Full Name */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="fullName">Full Name</label>
-              <input id="fullName" type="text" className="ds-input" placeholder="Dr. Jane Smith" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="fullName">
+                Full Name
+              </label>
+              <div className="relative">
+                <input
+                  id="fullName"
+                  type="text"
+                  className={`ds-input transition-colors ${
+                    touched.fullName && fullNameError
+                      ? "border-red-500 focus:border-red-500 ring-1 ring-red-500/20"
+                      : touched.fullName && !fullNameError
+                      ? "border-emerald-500/60"
+                      : ""
+                  }`}
+                  placeholder="Dr. Jane Smith"
+                  value={fullName}
+                  onChange={(e) => {
+                    setFullName(e.target.value);
+                    if (formError) setFormError(null);
+                  }}
+                  onBlur={() => handleBlur("fullName")}
+                  required
+                />
+                {touched.fullName && !fullNameError && fullName.trim().length > 0 && (
+                  <span className="material-symbols-outlined absolute right-3.5 top-1/2 -translate-y-1/2 text-[18px] text-emerald-500 pointer-events-none">
+                    check_circle
+                  </span>
+                )}
+              </div>
+              {touched.fullName && fullNameError && (
+                <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5 mt-1 animate-fade-in font-medium">
+                  <span className="material-symbols-outlined text-[14px]">error</span>
+                  <span>{fullNameError}</span>
+                </p>
+              )}
             </div>
 
+            {/* Email Address */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="reg-email">Email Address</label>
+              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="reg-email">
+                Email Address
+              </label>
               <div className="relative">
                 <input
                   id="reg-email"
                   type="email"
-                  className="ds-input pr-10"
+                  className={`ds-input pr-10 transition-colors ${
+                    touched.email && emailError
+                      ? "border-red-500 focus:border-red-500 ring-1 ring-red-500/20"
+                      : touched.email && !emailError && emailAvailable === true
+                      ? "border-emerald-500/60"
+                      : ""
+                  }`}
                   placeholder="you@example.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => handleEmailChange(e.target.value)}
+                  onBlur={() => handleBlur("email")}
                   required
                 />
-                {emailAvailable !== null && (
-                  <span className={`material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-[18px] ${emailAvailable ? "text-emerald-500" : "text-red-500"}`}>
-                    {emailAvailable ? "check_circle" : "cancel"}
-                  </span>
-                )}
+                <div className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center pointer-events-none">
+                  {isCheckingEmail && (
+                    <span className="w-4 h-4 border-2 border-slate-300 border-t-[var(--primary)] rounded-full animate-spin" />
+                  )}
+                  {!isCheckingEmail && touched.email && emailFormatError && (
+                    <span className="material-symbols-outlined text-[18px] text-red-500">
+                      cancel
+                    </span>
+                  )}
+                  {!isCheckingEmail && touched.email && !emailFormatError && emailAvailable === false && (
+                    <span className="material-symbols-outlined text-[18px] text-red-500">
+                      cancel
+                    </span>
+                  )}
+                  {!isCheckingEmail && touched.email && !emailFormatError && emailAvailable === true && (
+                    <span className="material-symbols-outlined text-[18px] text-emerald-500">
+                      check_circle
+                    </span>
+                  )}
+                </div>
               </div>
+              {touched.email && emailError && (
+                <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5 mt-1 animate-fade-in font-medium">
+                  <span className="material-symbols-outlined text-[14px]">error</span>
+                  <span>{emailError}</span>
+                </p>
+              )}
             </div>
 
+            {/* Password */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="reg-password">Password</label>
+              <label className="text-xs font-semibold" style={{ color: "var(--on-surface-variant)" }} htmlFor="reg-password">
+                Password
+              </label>
               <div className="relative">
                 <input
                   id="reg-password"
                   type={showPassword ? "text" : "password"}
-                  className="ds-input pr-12"
+                  className={`ds-input pr-12 transition-colors ${
+                    touched.password && passwordError
+                      ? "border-red-500 focus:border-red-500 ring-1 ring-red-500/20"
+                      : touched.password && !passwordError
+                      ? "border-emerald-500/60"
+                      : ""
+                  }`}
                   placeholder="••••••••"
                   value={password}
-                  onChange={(e) => handlePasswordChange(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (formError) setFormError(null);
+                  }}
+                  onBlur={() => handleBlur("password")}
                   required
                 />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 cursor-pointer" style={{ color: "var(--on-surface-variant)" }}>
-                  <span className="material-symbols-outlined text-[18px]">{showPassword ? "visibility_off" : "visibility"}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  <span className="material-symbols-outlined text-[18px]">
+                    {showPassword ? "visibility_off" : "visibility"}
+                  </span>
                 </button>
               </div>
+
+              {/* Password Strength Meter */}
               {password && (
-                <div className="flex items-center gap-2 pt-1">
-                  <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ backgroundColor: "var(--surface-container-highest)" }}>
-                    <div className="h-full rounded-full transition-all duration-300" style={{ width: `${strength}%`, backgroundColor: strengthColor }} />
+                <div className="space-y-2 pt-1 animate-fade-in">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700">
+                      <div
+                        className="h-full rounded-full transition-all duration-300"
+                        style={{
+                          width: `${passwordStrength.percentage}%`,
+                          backgroundColor: passwordStrength.color,
+                        }}
+                      />
+                    </div>
+                    <span
+                      className="text-[10px] font-bold uppercase tracking-wider"
+                      style={{ color: passwordStrength.color }}
+                    >
+                      {passwordStrength.label}
+                    </span>
                   </div>
-                  <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: strengthColor }}>{strengthLabel}</span>
+
+                  {/* Password Requirements Checklist */}
+                  <div className="grid grid-cols-2 gap-1.5 pt-1 text-[11px]">
+                    <div
+                      className={`flex items-center gap-1 transition-colors ${
+                        passwordCriteria.hasMinLength
+                          ? "text-emerald-600 dark:text-emerald-400 font-medium"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {passwordCriteria.hasMinLength ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      <span>8+ characters</span>
+                    </div>
+
+                    <div
+                      className={`flex items-center gap-1 transition-colors ${
+                        passwordCriteria.hasUpper
+                          ? "text-emerald-600 dark:text-emerald-400 font-medium"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {passwordCriteria.hasUpper ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      <span>Uppercase (A-Z)</span>
+                    </div>
+
+                    <div
+                      className={`flex items-center gap-1 transition-colors ${
+                        passwordCriteria.hasLower
+                          ? "text-emerald-600 dark:text-emerald-400 font-medium"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {passwordCriteria.hasLower ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      <span>Lowercase (a-z)</span>
+                    </div>
+
+                    <div
+                      className={`flex items-center gap-1 transition-colors ${
+                        passwordCriteria.hasNumberOrSpecial
+                          ? "text-emerald-600 dark:text-emerald-400 font-medium"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">
+                        {passwordCriteria.hasNumberOrSpecial ? "check_circle" : "radio_button_unchecked"}
+                      </span>
+                      <span>Number or symbol</span>
+                    </div>
+                  </div>
                 </div>
+              )}
+
+              {touched.password && passwordError && (
+                <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5 mt-1 animate-fade-in font-medium">
+                  <span className="material-symbols-outlined text-[14px]">error</span>
+                  <span>{passwordError}</span>
+                </p>
               )}
             </div>
 
-            <div className="flex items-center gap-3 py-1">
-              <input id="terms" type="checkbox" className="w-4 h-4 rounded cursor-pointer" checked={terms} onChange={(e) => setTerms(e.target.checked)} required />
-              <label htmlFor="terms" className="text-xs cursor-pointer select-none" style={{ color: "var(--on-surface-variant)" }}>
-                I agree to the{" "}
-                <a className="font-bold hover:underline" style={{ color: "var(--primary)" }} href="#">Scholarly Conduct Policy</a>{" "}
-                and Terms.
-              </label>
+            {/* Terms & Conditions Checkbox */}
+            <div className="space-y-1 pt-1">
+              <div className="flex items-center gap-3">
+                <input
+                  id="terms"
+                  type="checkbox"
+                  className={`w-4 h-4 rounded cursor-pointer accent-[var(--primary)] transition-all ${
+                    touched.terms && termsError ? "ring-2 ring-red-500" : ""
+                  }`}
+                  checked={terms}
+                  onChange={(e) => {
+                    setTerms(e.target.checked);
+                    if (formError) setFormError(null);
+                  }}
+                  onBlur={() => handleBlur("terms")}
+                  required
+                />
+                <label htmlFor="terms" className="text-xs cursor-pointer select-none" style={{ color: "var(--on-surface-variant)" }}>
+                  I agree to the{" "}
+                  <a className="font-bold hover:underline" style={{ color: "var(--primary)" }} href="#">
+                    Scholarly Conduct Policy
+                  </a>{" "}
+                  and Terms.
+                </label>
+              </div>
+              {touched.terms && termsError && (
+                <p className="text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5 animate-fade-in font-medium">
+                  <span className="material-symbols-outlined text-[14px]">error</span>
+                  <span>{termsError}</span>
+                </p>
+              )}
             </div>
 
-            <button type="submit" disabled={loading || emailAvailable === false} className="ds-btn-primary w-full py-3.5 mt-1">
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="ds-btn-primary w-full py-3.5 mt-2 shadow-sm hover:shadow-md active:scale-[0.99] transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+            >
               {loading ? (
-                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Processing...</>
+                <>
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Creating Account...
+                </>
               ) : (
-                <>Create Account <span className="material-symbols-outlined text-[18px]">arrow_forward</span></>
+                <>
+                  Create Account <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                </>
               )}
             </button>
           </form>
 
+          {/* Social Logins */}
           <div className="my-5 flex items-center gap-3">
             <div className="ds-divider flex-1" />
-            <span className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--on-surface-variant)" }}>or register with</span>
+            <span className="text-xs font-bold uppercase tracking-widest" style={{ color: "var(--on-surface-variant)" }}>
+              or register with
+            </span>
             <div className="ds-divider flex-1" />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => { window.location.href = `${getGoogleOAuthUrl()}?action=register`; }} className="ds-btn-secondary py-3 text-sm">
+            <button
+              type="button"
+              onClick={() => { window.location.href = `${getGoogleOAuthUrl()}?action=register`; }}
+              className="ds-btn-secondary py-3 text-sm"
+            >
               <GoogleIcon /> Google
             </button>
-            <button type="button" onClick={() => { window.location.href = `${getGitHubOAuthUrl()}?action=register`; }} className="ds-btn-secondary py-3 text-sm" style={{ color: "var(--on-surface)" }}>
+            <button
+              type="button"
+              onClick={() => { window.location.href = `${getGitHubOAuthUrl()}?action=register`; }}
+              className="ds-btn-secondary py-3 text-sm"
+              style={{ color: "var(--on-surface)" }}
+            >
               <GitHubIcon /> GitHub
             </button>
           </div>
 
           <p className="mt-7 text-center text-sm" style={{ color: "var(--on-surface-variant)" }}>
             Already have an account?{" "}
-            <Link className="font-bold hover:underline" style={{ color: "var(--primary)" }} href="/login">Sign In</Link>
+            <Link className="font-bold hover:underline" style={{ color: "var(--primary)" }} href="/login">
+              Sign In
+            </Link>
           </p>
         </div>
       </section>

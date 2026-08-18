@@ -142,36 +142,8 @@ export default function Sidebar({ status }: { status: OnboardingStatusResponse |
         })}
       </nav>
 
-      {/* Footer CTA — only show for users with subject.create permission */}
-      {!collapsed && hasPermission("subject.create") && (
-        <div className="px-4 pb-6 mt-auto space-y-3">
-          <button
-            className="w-full py-3 rounded-full font-bold text-sm transition-all hover:scale-95"
-            style={{
-              backgroundColor: "var(--secondary-container)",
-              color: "var(--on-secondary-container)",
-            }}
-          >
-            New Lesson
-          </button>
-          <div
-            className="flex items-center justify-between pt-3 border-t"
-            style={{ borderColor: "rgba(255,255,255,0.1)" }}
-          >
-            <span className="text-[11px] font-semibold" style={{ color: "rgba(255,255,255,0.4)" }}>Status</span>
-            <span
-              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                hasOrg ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"
-              }`}
-            >
-              {hasOrg ? "Onboarded" : "Setup Pending"}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Footer status for users without subject.create */}
-      {!collapsed && !hasPermission("subject.create") && (
+      {/* Footer status */}
+      {!collapsed && (
         <div className="px-4 pb-6 mt-auto">
           <div
             className="flex items-center justify-between pt-3 border-t"
