@@ -26,6 +26,7 @@ import {
   Assignment,
   AssignmentAttachment,
   Submission,
+  SubmissionAttachment,
 } from "@/lib/assignments";
 import { usePermissions } from "@/lib/permissions";
 import ForbiddenState from "../../components/ForbiddenState";
@@ -82,6 +83,15 @@ export default function AssignmentDetailPage() {
   const [editDue, setEditDue] = useState("");
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // File preview modal state
+  const [previewFile, setPreviewFile] = useState<{
+    url?: string;
+    filename: string;
+    contentType?: string;
+    size?: number;
+    loading?: boolean;
+  } | null>(null);
 
   const isTeacherOrAdmin = hasPermission("assignment.update") || hasPermission("assignment.create") || hasPermission("member.update");
 
@@ -239,13 +249,64 @@ export default function AssignmentDetailPage() {
     }
   };
 
-  const handleDownloadTeacherAttachment = async (attachmentId: string) => {
+  const triggerDownload = async (url: string, filename: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
+  const handleViewTeacherAttachment = async (att: AssignmentAttachment) => {
     if (!assignment) return;
+    setPreviewFile({
+      filename: att.original_filename,
+      contentType: att.content_type,
+      size: att.size,
+      loading: true,
+    });
+    try {
+      const res = await getAssignmentAttachmentDownloadUrl(assignment.assignment_id, att.attachment_id);
+      setPreviewFile({
+        url: res.download_url,
+        filename: att.original_filename,
+        contentType: att.content_type,
+        size: att.size,
+        loading: false,
+      });
+    } catch (err: any) {
+      alert(err?.message || "Failed to load preview.");
+      setPreviewFile(null);
+    }
+  };
+
+  const handleDownloadTeacherAttachment = async (
+    target: AssignmentAttachment | string,
+    filenameFallback?: string
+  ) => {
+    if (!assignment) return;
+    const attachmentId = typeof target === "string" ? target : target.attachment_id;
+    const filename = typeof target === "string" ? (filenameFallback || "attachment") : target.original_filename;
     try {
       const res = await getAssignmentAttachmentDownloadUrl(assignment.assignment_id, attachmentId);
-      window.open(res.download_url, "_blank");
+      await triggerDownload(res.download_url, filename);
     } catch (err: any) {
-      alert(err?.message || "Failed to generate download link.");
+      alert(err?.message || "Failed to download file.");
     }
   };
 
@@ -311,11 +372,39 @@ export default function AssignmentDetailPage() {
     }
   };
 
-  const handleDownloadStudentAttachment = async (attachmentId: string) => {
+  const handleViewStudentAttachment = async (att: SubmissionAttachment) => {
     if (!assignment) return;
+    setPreviewFile({
+      filename: att.original_filename,
+      contentType: att.content_type,
+      size: att.size,
+      loading: true,
+    });
+    try {
+      const res = await getSubmissionAttachmentDownloadUrl(assignment.assignment_id, att.attachment_id);
+      setPreviewFile({
+        url: res.download_url,
+        filename: att.original_filename,
+        contentType: att.content_type,
+        size: att.size,
+        loading: false,
+      });
+    } catch (err: any) {
+      alert(err?.message || "Failed to load preview.");
+      setPreviewFile(null);
+    }
+  };
+
+  const handleDownloadStudentAttachment = async (
+    target: SubmissionAttachment | string,
+    filenameFallback?: string
+  ) => {
+    if (!assignment) return;
+    const attachmentId = typeof target === "string" ? target : target.attachment_id;
+    const filename = typeof target === "string" ? (filenameFallback || "submission_file") : target.original_filename;
     try {
       const res = await getSubmissionAttachmentDownloadUrl(assignment.assignment_id, attachmentId);
-      window.open(res.download_url, "_blank");
+      await triggerDownload(res.download_url, filename);
     } catch (err: any) {
       alert(err?.message || "Failed to download submission attachment.");
     }
@@ -508,18 +597,26 @@ export default function AssignmentDetailPage() {
           {attachments.length === 0 ? (
             <p className="text-xs text-muted-foreground italic">No reference attachments uploaded.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {attachments.map((att) => (
                 <div
                   key={att.attachment_id}
-                  className="flex items-center justify-between p-3 rounded-xl border bg-background/50 hover:bg-muted/50 transition-colors text-xs"
+                  className="flex items-center justify-between p-3 rounded-2xl border bg-muted/30 hover:bg-muted/50 transition-colors text-xs"
                 >
-                  <div className="flex items-center gap-2 overflow-hidden">
-                    <span className="material-symbols-outlined text-primary text-[20px] shrink-0">
-                      description
+                  <div
+                    className="flex items-center gap-3 truncate cursor-pointer flex-1"
+                    onClick={() => handleViewTeacherAttachment(att)}
+                    title="Click to view / preview file"
+                  >
+                    <span className="material-symbols-outlined text-[24px] text-primary shrink-0">
+                      {att.original_filename.toLowerCase().endsWith(".pdf")
+                        ? "picture_as_pdf"
+                        : att.original_filename.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp|svg)$/)
+                        ? "image"
+                        : "description"}
                     </span>
                     <div className="truncate">
-                      <p className="font-bold truncate">{att.original_filename}</p>
+                      <p className="font-bold truncate hover:text-primary transition-colors">{att.original_filename}</p>
                       <p className="text-[10px] text-muted-foreground">
                         {(att.size / 1024 / 1024).toFixed(2)} MB
                       </p>
@@ -530,9 +627,18 @@ export default function AssignmentDetailPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => handleDownloadTeacherAttachment(att.attachment_id)}
+                      onClick={() => handleViewTeacherAttachment(att)}
+                      title="View / Preview file"
+                      className="h-8 w-8 p-0 text-primary hover:bg-primary/10 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">visibility</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleDownloadTeacherAttachment(att)}
                       title="Download file"
-                      className="h-8 w-8 p-0 cursor-pointer"
+                      className="h-8 w-8 p-0 cursor-pointer hover:bg-muted"
                     >
                       <span className="material-symbols-outlined text-[18px]">download</span>
                     </Button>
@@ -542,7 +648,7 @@ export default function AssignmentDetailPage() {
                         variant="ghost"
                         onClick={() => handleDeleteAttachment(att.attachment_id)}
                         title="Delete attachment"
-                        className="h-8 w-8 p-0 text-destructive hover:text-destructive cursor-pointer"
+                        className="h-8 w-8 p-0 text-destructive hover:text-destructive cursor-pointer hover:bg-destructive/10"
                       >
                         <span className="material-symbols-outlined text-[18px]">delete</span>
                       </Button>
@@ -739,22 +845,51 @@ export default function AssignmentDetailPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {studentSubmission.attachments.map((att) => (
-                    <button
+                    <div
                       key={att.attachment_id}
-                      type="button"
-                      onClick={() => handleDownloadStudentAttachment(att.attachment_id)}
-                      className="flex items-center justify-between p-3 rounded-xl border bg-card hover:bg-muted/50 text-left text-xs transition-colors cursor-pointer shadow-xs"
+                      className="flex items-center justify-between p-3 rounded-xl border bg-card hover:bg-muted/50 text-left text-xs transition-colors shadow-xs"
                     >
-                      <div className="truncate mr-2">
-                        <p className="font-semibold truncate">{att.original_filename}</p>
-                        <p className="text-[10px] text-muted-foreground font-mono">
-                          {(att.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
+                      <div
+                        className="truncate mr-2 flex items-center gap-2.5 cursor-pointer flex-1"
+                        onClick={() => handleViewStudentAttachment(att)}
+                        title="Click to view / preview file"
+                      >
+                        <span className="material-symbols-outlined text-[20px] text-primary shrink-0">
+                          {att.original_filename.toLowerCase().endsWith(".pdf")
+                            ? "picture_as_pdf"
+                            : att.original_filename.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp|svg)$/)
+                            ? "image"
+                            : "description"}
+                        </span>
+                        <div className="truncate">
+                          <p className="font-semibold truncate hover:text-primary transition-colors">{att.original_filename}</p>
+                          <p className="text-[10px] text-muted-foreground font-mono">
+                            {(att.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
                       </div>
-                      <span className="material-symbols-outlined text-[18px] text-primary shrink-0">
-                        download
-                      </span>
-                    </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleViewStudentAttachment(att)}
+                          title="View / Preview file"
+                          className="h-8 w-8 p-0 text-primary hover:bg-primary/10 cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">visibility</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDownloadStudentAttachment(att)}
+                          title="Download file"
+                          className="h-8 w-8 p-0 cursor-pointer hover:bg-muted"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                        </Button>
+                      </div>
+                    </div>
                   ))}
                 </div>
 
@@ -893,21 +1028,47 @@ export default function AssignmentDetailPage() {
                       key={att.attachment_id}
                       className="flex items-center justify-between p-3 rounded-xl border bg-muted/40 text-xs"
                     >
-                      <div className="truncate mr-2">
-                        <span className="font-semibold truncate block">{att.original_filename}</span>
-                        <span className="text-[10px] text-muted-foreground font-mono">
-                          {(att.size / 1024 / 1024).toFixed(2)} MB
-                        </span>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDownloadStudentAttachment(att.attachment_id)}
-                        className="h-8 gap-1 font-bold text-primary cursor-pointer shrink-0"
+                      <div
+                        className="truncate mr-2 flex items-center gap-2 cursor-pointer flex-1"
+                        onClick={() => handleViewStudentAttachment(att)}
+                        title="Click to preview file"
                       >
-                        <span className="material-symbols-outlined text-[16px]">download</span>
-                        Download
-                      </Button>
+                        <span className="material-symbols-outlined text-[20px] text-primary shrink-0">
+                          {att.original_filename.toLowerCase().endsWith(".pdf")
+                            ? "picture_as_pdf"
+                            : att.original_filename.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp|svg)$/)
+                            ? "image"
+                            : "description"}
+                        </span>
+                        <div className="truncate">
+                          <span className="font-semibold truncate block hover:text-primary transition-colors">{att.original_filename}</span>
+                          <span className="text-[10px] text-muted-foreground font-mono">
+                            {(att.size / 1024 / 1024).toFixed(2)} MB
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleViewStudentAttachment(att)}
+                          className="h-8 gap-1 font-bold text-primary cursor-pointer shrink-0"
+                          title="View file"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">visibility</span>
+                          View
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDownloadStudentAttachment(att)}
+                          className="h-8 gap-1 font-bold text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+                          title="Download file"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">download</span>
+                          Download
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1016,6 +1177,122 @@ export default function AssignmentDetailPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* File Preview Modal */}
+      <Dialog open={!!previewFile} onOpenChange={(open) => { if (!open) setPreviewFile(null); }}>
+        <DialogContent className="max-w-4xl w-[95vw] h-[85vh] flex flex-col p-0 overflow-hidden bg-[var(--surface)] border-[var(--outline-variant)]">
+          <DialogHeader className="p-4 border-b border-[var(--outline-variant)] flex flex-row items-center justify-between space-y-0">
+            <div className="flex items-center gap-2.5 truncate max-w-[65%]">
+              <span className="material-symbols-outlined text-[24px] text-primary shrink-0">
+                {previewFile?.filename.toLowerCase().endsWith(".pdf")
+                  ? "picture_as_pdf"
+                  : previewFile?.filename.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp|svg)$/)
+                  ? "image"
+                  : "description"}
+              </span>
+              <div className="truncate">
+                <DialogTitle className="text-sm font-bold truncate">
+                  {previewFile?.filename}
+                </DialogTitle>
+                {previewFile?.size ? (
+                  <p className="text-[11px] text-muted-foreground font-mono">
+                    {(previewFile.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 mr-6">
+              {previewFile?.url && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => previewFile.url && window.open(previewFile.url, "_blank")}
+                    className="h-8 text-xs gap-1.5 font-semibold cursor-pointer"
+                    title="Open in new window / tab"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                    <span className="hidden sm:inline">Open in Tab</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => previewFile.url && triggerDownload(previewFile.url, previewFile.filename)}
+                    className="h-8 text-xs gap-1.5 font-bold cursor-pointer bg-primary text-white hover:opacity-90"
+                    title="Download file"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">download</span>
+                    <span className="hidden sm:inline">Download</span>
+                  </Button>
+                </>
+              )}
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-muted/20">
+            {previewFile?.loading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16">
+                <div className="w-8 h-8 border-3 border-t-transparent border-primary rounded-full animate-spin" />
+                <p className="text-xs font-semibold text-muted-foreground">Preparing preview...</p>
+              </div>
+            ) : previewFile?.url ? (
+              <>
+                {previewFile.filename.toLowerCase().endsWith(".pdf") ? (
+                  <iframe
+                    src={previewFile.url}
+                    className="w-full h-full rounded-xl border border-[var(--outline-variant)] bg-white shadow-xs"
+                    title={previewFile.filename}
+                  />
+                ) : previewFile.filename.toLowerCase().match(/\.(png|jpg|jpeg|gif|webp|svg)$/) ? (
+                  <div className="flex items-center justify-center w-full h-full p-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewFile.url}
+                      alt={previewFile.filename}
+                      className="max-h-full max-w-full object-contain rounded-xl shadow-md"
+                    />
+                  </div>
+                ) : previewFile.filename.toLowerCase().match(/\.(txt|md|csv|json|py|js|ts|tsx|jsx|html|css)$/) ? (
+                  <iframe
+                    src={previewFile.url}
+                    className="w-full h-full rounded-xl border border-[var(--outline-variant)] bg-card p-4 font-mono text-xs shadow-xs"
+                    title={previewFile.filename}
+                  />
+                ) : (
+                  <div className="text-center p-8 space-y-4 max-w-md">
+                    <span className="material-symbols-outlined text-[56px] text-muted-foreground opacity-60">
+                      draft
+                    </span>
+                    <div>
+                      <h3 className="text-base font-bold text-foreground">Preview Not Supported Directly</h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        This file format ({previewFile.filename.split('.').pop()?.toUpperCase()}) cannot be rendered directly inside the browser preview.
+                      </p>
+                    </div>
+                    <div className="flex justify-center gap-3 pt-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => previewFile.url && window.open(previewFile.url, "_blank")}
+                        className="gap-1.5 text-xs font-semibold cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                        Try In New Window
+                      </Button>
+                      <Button
+                        onClick={() => previewFile.url && triggerDownload(previewFile.url, previewFile.filename)}
+                        className="gap-1.5 text-xs font-bold cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">download</span>
+                        Download File
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     ASSIGNMENT_ATTACHMENT_MAX_SIZE_MB: int = 25
     ASSIGNMENT_MAX_ATTACHMENTS_COUNT: int = 10
 
+    # Subject Course Materials limits (in MB)
+    MATERIAL_MAX_DOC_SIZE_MB: int = 50
+    MATERIAL_MAX_IMAGE_SIZE_MB: int = 10
+    MATERIAL_MAX_VIDEO_SIZE_MB: int = 500
+    MATERIAL_MAX_ZIP_SIZE_MB: int = 100
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

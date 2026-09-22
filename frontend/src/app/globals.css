@@ -7,8 +7,9 @@
     --surface: #fcf9f8;
     --on-surface: #1c1b1b;
     --on-surface-variant: #404945;
-    --surface-container: #f0edec;
+    --surface-container-lowest: #ffffff;
     --surface-container-low: #f6f3f2;
+    --surface-container: #f0edec;
     --surface-container-high: #ebe7e7;
     --surface-container-highest: #e5e2e1;
     --surface-variant: #e5e2e1;
@@ -46,8 +47,9 @@
     --surface: #141816;
     --on-surface: #e1e4e1;
     --on-surface-variant: #c0c8c4;
-    --surface-container: #1b211e;
+    --surface-container-lowest: #0e1210;
     --surface-container-low: #171d1a;
+    --surface-container: #1b211e;
     --surface-container-high: #252c28;
     --surface-container-highest: #2f3732;
     --surface-variant: #3f4944;

@@ -19,6 +19,7 @@ const NAV_CONFIG = [
   { name: "Workspaces",          href: "/classroom/workspaces",     icon: "workspaces",           permission: "workspace.read" },
   { name: "Subjects",            href: "/classroom/subjects",       icon: "menu_book",            permission: "subject.read" },
   { name: "Assignments",         href: "/classroom/assignments",    icon: "assignment",           permission: "assignment.read" },
+  { name: "Assessments",         href: "/classroom/assessments",    icon: "quiz",                 permission: "assessment.read" },
   { name: "Members",             href: "/classroom/members",        icon: "group",                permission: "member.read" },
   { name: "Roles & Permissions", href: "/classroom/settings/roles", icon: "admin_panel_settings", permission: "member.update" },
   { name: "Analytics",           href: "/classroom/analytics",      icon: "analytics",            permission: "analytics.view" },

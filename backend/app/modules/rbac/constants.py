@@ -34,12 +34,35 @@ class SubjectPermission:
     TEACHER_REMOVE = "subject.teacher.remove"
 
 
+class SubjectMaterialPermission:
+    CREATE = "subject.material.create"
+    READ = "subject.material.read"
+    UPDATE = "subject.material.update"
+    DELETE = "subject.material.delete"
+
+
 class AssignmentPermission:
     CREATE = "assignment.create"
     READ = "assignment.read"
     UPDATE = "assignment.update"
     DELETE = "assignment.delete"
     GRADE = "assignment.grade"
+
+
+class AssessmentPermission:
+    CREATE = "assessment.create"
+    READ = "assessment.read"
+    UPDATE = "assessment.update"
+    DELETE = "assessment.delete"
+    PUBLISH = "assessment.publish"
+
+
+class QuestionPermission:
+    CREATE = "question.create"
+    READ = "question.read"
+    UPDATE = "question.update"
+    DELETE = "question.delete"
+    REORDER = "question.reorder"
 
 
 class AttendancePermission:

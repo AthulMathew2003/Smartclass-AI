@@ -69,11 +69,25 @@ async def test_engine():
             ("subject.delete", "Archive subjects"),
             ("subject.teacher.add", "Add teachers to subjects"),
             ("subject.teacher.remove", "Remove teachers from subjects"),
+            ("subject.material.create", "Upload course materials to subjects"),
+            ("subject.material.read", "View and download course materials"),
+            ("subject.material.update", "Update course material metadata"),
+            ("subject.material.delete", "Archive or delete course materials"),
             ("assignment.create", "Create assignments"),
             ("assignment.read", "View assignments"),
             ("assignment.update", "Update assignments"),
             ("assignment.delete", "Archive or delete assignments"),
             ("assignment.grade", "Grade student assignments"),
+            ("assessment.create", "Create assessments"),
+            ("assessment.read", "View assessments"),
+            ("assessment.update", "Update assessments"),
+            ("assessment.delete", "Archive or delete assessments"),
+            ("assessment.publish", "Publish assessments"),
+            ("question.create", "Create assessment questions"),
+            ("question.read", "View assessment questions"),
+            ("question.update", "Update assessment questions"),
+            ("question.delete", "Archive or delete assessment questions"),
+            ("question.reorder", "Reorder assessment questions"),
             ("attendance.view", "View attendance records"),
             ("attendance.manage", "Take or update attendance"),
             ("exam.create", "Create exams"),
@@ -101,23 +115,29 @@ async def test_engine():
                 "workspace.create", "workspace.read", "workspace.update", "workspace.delete",
                 "subject.create", "subject.read", "subject.update", "subject.delete",
                 "subject.teacher.add", "subject.teacher.remove",
+                "subject.material.create", "subject.material.read", "subject.material.update", "subject.material.delete",
                 "assignment.create", "assignment.read", "assignment.update", "assignment.delete",
+                "assessment.create", "assessment.read", "assessment.update", "assessment.delete", "assessment.publish",
+                "question.create", "question.read", "question.update", "question.delete", "question.reorder",
                 "attendance.view", "attendance.manage", "analytics.view"
             ],
             "Teacher": [
                 "workspace.read", "subject.create", "subject.read", "subject.update",
                 "subject.teacher.add", "subject.teacher.remove",
+                "subject.material.create", "subject.material.read", "subject.material.update", "subject.material.delete",
                 "assignment.create", "assignment.read", "assignment.update", "assignment.delete", "assignment.grade",
+                "assessment.create", "assessment.read", "assessment.update", "assessment.delete", "assessment.publish",
+                "question.create", "question.read", "question.update", "question.delete", "question.reorder",
                 "attendance.view", "attendance.manage", "analytics.view", "ai.use"
             ],
             "Student": [
-                "workspace.read", "subject.read", "assignment.read", "attendance.view", "ai.use"
+                "workspace.read", "subject.read", "subject.material.read", "assignment.read", "assessment.read", "question.read", "attendance.view", "ai.use"
             ],
             "Parent": [
-                "workspace.read", "assignment.read", "attendance.view"
+                "workspace.read", "subject.material.read", "assignment.read", "assessment.read", "question.read", "attendance.view"
             ],
             "Staff": [
-                "workspace.read", "assignment.read", "attendance.view", "analytics.view"
+                "workspace.read", "subject.material.read", "assignment.read", "assessment.read", "question.read", "attendance.view", "analytics.view"
             ]
         }
 

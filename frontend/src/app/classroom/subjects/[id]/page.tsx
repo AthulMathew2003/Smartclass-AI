@@ -65,25 +65,20 @@ export default function SubjectDetailsPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const loadData = useCallback(async () => {
-    if (!workspaceIdFromQuery) {
-      setError("Workspace ID is missing from the URL. Cannot load subject.");
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
     setError(null);
     setIsForbidden(false);
     try {
-      const subj = await fetchSubject(id, workspaceIdFromQuery);
+      const subj = await fetchSubject(id, workspaceIdFromQuery || undefined);
       setSubject(subj);
 
-      const mems = await fetchSubjectTeachers(id, workspaceIdFromQuery);
+      const effectiveWorkspaceId = workspaceIdFromQuery || subj.subject_workspace_id;
+      const mems = await fetchSubjectTeachers(id, effectiveWorkspaceId);
       setTeachers(mems);
 
-      if (hasPermission("subject.teacher.add")) {
+      if (hasPermission("subject.teacher.add") && effectiveWorkspaceId) {
         try {
-          const wsMems = await fetchWorkspaceMembers(workspaceIdFromQuery);
+          const wsMems = await fetchWorkspaceMembers(effectiveWorkspaceId);
           setWorkspaceMembers(wsMems);
         } catch {
           // Handled gracefully
@@ -233,7 +228,23 @@ export default function SubjectDetailsPage() {
               <p className="text-[var(--on-surface-variant)] mt-2 max-w-2xl">{subject.subject_description}</p>
             )}
           </div>
-          <div className="flex items-center gap-3 self-start sm:self-auto">
+          <div className="flex flex-wrap items-center gap-2">
+            {hasPermission("subject.material.read") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  router.push(
+                    workspaceIdFromQuery
+                      ? `/classroom/subjects/${id}/materials?workspace_id=${workspaceIdFromQuery}`
+                      : `/classroom/subjects/${id}/materials`
+                  )
+                }
+              >
+                <span className="material-symbols-outlined mr-1.5 text-[18px]">folder_open</span>
+                Materials
+              </Button>
+            )}
             {hasPermission("assignment.read") && (
               <Button
                 variant="outline"
@@ -250,6 +261,34 @@ export default function SubjectDetailsPage() {
                 Assignments
               </Button>
             )}
+            {hasPermission("assessment.read") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  router.push(
+                    workspaceIdFromQuery
+                      ? `/classroom/subjects/${id}/assessments?workspace_id=${workspaceIdFromQuery}`
+                      : `/classroom/subjects/${id}/assessments`
+                  )
+                }
+              >
+                <span className="material-symbols-outlined mr-1.5 text-[18px]">quiz</span>
+                Assessments
+              </Button>
+            )}
+            {hasPermission("assessment.create") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  router.push(`/classroom/subjects/${id}/question-bank`)
+                }
+              >
+                <span className="material-symbols-outlined mr-1.5 text-[18px]">menu_book</span>
+                Question Bank
+              </Button>
+            )}
             {canEdit && (
               <Button
                 variant="outline"
@@ -264,7 +303,7 @@ export default function SubjectDetailsPage() {
                 Edit
               </Button>
             )}
-            <div className="text-right">
+            <div className="text-right ml-2">
               <div className="text-xs text-[var(--on-surface-variant)] font-medium uppercase tracking-wider">Status</div>
               <div className={`font-bold capitalize text-sm ${isArchived ? "text-amber-600" : "text-emerald-600"}`}>
                 {subject.subject_status}
@@ -281,7 +320,7 @@ export default function SubjectDetailsPage() {
         </TabsList>
         
         <TabsContent value="overview" className="space-y-6 pt-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             <div className="p-6 rounded-xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)]">
               <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Assigned Teachers</div>
               <div className="text-3xl font-bold text-[var(--on-surface)]">{teachers.length}</div>
@@ -290,6 +329,27 @@ export default function SubjectDetailsPage() {
               <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Created</div>
               <div className="text-lg font-bold text-[var(--on-surface)]">
                 {new Date(subject.subject_created_at).toLocaleDateString()}
+              </div>
+            </div>
+            <div
+              onClick={() =>
+                router.push(
+                  workspaceIdFromQuery
+                    ? `/classroom/subjects/${id}/materials?workspace_id=${workspaceIdFromQuery}`
+                    : `/classroom/subjects/${id}/materials`
+                )
+              }
+              className="p-6 rounded-xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] hover:border-[var(--primary)] transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Resources</div>
+                <div className="text-lg font-bold text-[var(--on-surface)] group-hover:text-[var(--primary)] transition-colors flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[20px]">folder_open</span>
+                  Materials
+                </div>
+              </div>
+              <div className="text-xs text-[var(--primary)] font-semibold mt-3 flex items-center gap-0.5">
+                View all &rarr;
               </div>
             </div>
             <div
@@ -307,6 +367,27 @@ export default function SubjectDetailsPage() {
                 <div className="text-lg font-bold text-[var(--on-surface)] group-hover:text-[var(--primary)] transition-colors flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-[20px]">assignment</span>
                   Assignments
+                </div>
+              </div>
+              <div className="text-xs text-[var(--primary)] font-semibold mt-3 flex items-center gap-0.5">
+                View all &rarr;
+              </div>
+            </div>
+            <div
+              onClick={() =>
+                router.push(
+                  workspaceIdFromQuery
+                    ? `/classroom/subjects/${id}/assessments?workspace_id=${workspaceIdFromQuery}`
+                    : `/classroom/subjects/${id}/assessments`
+                )
+              }
+              className="p-6 rounded-xl bg-[var(--surface-container-lowest)] border border-[var(--outline-variant)] hover:border-[var(--primary)] transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="text-sm text-[var(--on-surface-variant)] font-medium mb-1">Testing</div>
+                <div className="text-lg font-bold text-[var(--on-surface)] group-hover:text-[var(--primary)] transition-colors flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[20px]">quiz</span>
+                  Assessments
                 </div>
               </div>
               <div className="text-xs text-[var(--primary)] font-semibold mt-3 flex items-center gap-0.5">

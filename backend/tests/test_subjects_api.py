@@ -73,6 +73,15 @@ async def test_subject_api_crud_and_rbac(client: AsyncClient, db_session, setup_
     assert res_list_s.status_code == 200
     assert len(res_list_s.json()) == 2
 
+    # Global listing without workspace_id
+    res_global_owner = await client.get("/api/v1/subjects", headers=headers_owner)
+    assert res_global_owner.status_code == 200
+    assert len(res_global_owner.json()) == 2
+
+    res_global_s = await client.get("/api/v1/subjects", headers=headers_s)
+    assert res_global_s.status_code == 200
+    assert len(res_global_s.json()) == 2
+
     # 5. Assign Teacher 1 to AI 101
     teacher_payload = {
         "user_id": str(data["teacher1"].user_id)

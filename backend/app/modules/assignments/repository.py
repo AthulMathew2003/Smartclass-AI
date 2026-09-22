@@ -227,19 +227,10 @@ class AssignmentRepository:
                 Workspace.workspace_status == WorkspaceStatus.ACTIVE,
                 Subject.subject_status == SubjectStatus.ACTIVE,
                 Assignment.assignment_status.in_([AssignmentStatus.PUBLISHED, AssignmentStatus.CLOSED]),
-                or_(
-                    exists().where(
-                        and_(
-                            WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id,
-                            WorkspaceMember.workspace_member_user_id == user_id
-                        )
-                    ),
-                    exists().where(
-                        and_(
-                            OrganizationMember.organization_member_organization_id == org_id,
-                            OrganizationMember.organization_member_user_id == user_id,
-                            OrganizationMember.organization_member_status == OrganizationMemberStatus.ACTIVE
-                        )
+                exists().where(
+                    and_(
+                        WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id,
+                        WorkspaceMember.workspace_member_user_id == user_id
                     )
                 )
             )

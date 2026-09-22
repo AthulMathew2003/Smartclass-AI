@@ -91,7 +91,7 @@ async def test_assignment_crud_and_lifecycle_transitions(client: AsyncClient, db
         "subject_id": subject_id,
         "title": "Binary Trees Assignment",
         "description": "Implement AVL and Red-Black tree rotations.",
-        "due_at": "2026-09-01T23:59:00Z"
+        "due_at": "2026-12-31T23:59:00Z"
     }
     create_a_res = await client.post("/api/v1/assignments", json=create_assign_payload, headers=teacher_data["headers"])
     assert create_a_res.status_code == 201
@@ -511,12 +511,24 @@ async def test_global_assignment_listing(client: AsyncClient, db_session):
     assert ws_miss.status_code == 200
     assert len(ws_miss.json()) == 0
 
-    # 6. Status filter test
-    status_published = await client.get("/api/v1/assignments?status=published", headers=student_data["headers"])
-    assert status_published.status_code == 200
-    assert len(status_published.json()) == 1
+    # 7. Student does NOT see assignments from workspaces they are not enrolled in
+    ws2_res = await client.post("/api/v1/workspaces", json={"workspace_name": "Other WS"}, headers=owner_data["headers"])
+    assert ws2_res.status_code == 201
+    ws2_id = ws2_res.json()["workspace_id"]
 
-    status_closed = await client.get("/api/v1/assignments?status=closed", headers=student_data["headers"])
-    assert status_closed.status_code == 200
-    assert len(status_closed.json()) == 0
+    sub2_res = await client.post("/api/v1/subjects", json={"workspace_id": ws2_id, "subject_name": "Chemistry"}, headers=owner_data["headers"])
+    assert sub2_res.status_code == 201
+    sub2_id = sub2_res.json()["subject_id"]
+
+    c2_res = await client.post("/api/v1/assignments", json={"subject_id": sub2_id, "title": "Secret Assignment"}, headers=owner_data["headers"])
+    assert c2_res.status_code == 201
+    assign2_id = c2_res.json()["assignment_id"]
+    await client.post(f"/api/v1/assignments/{assign2_id}/publish?subject_id={sub2_id}", headers=owner_data["headers"])
+
+    # Student still only sees 1 assignment (from Main WS), not Secret Assignment from Other WS
+    student_list3 = await client.get("/api/v1/assignments", headers=student_data["headers"])
+    assert student_list3.status_code == 200
+    assert len(student_list3.json()) == 1
+    assert student_list3.json()[0]["assignment_id"] == assign_id
+
 

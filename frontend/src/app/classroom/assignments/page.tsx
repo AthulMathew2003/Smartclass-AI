@@ -71,11 +71,12 @@ export default function AssignmentsPage() {
       let availableSubjects: Subject[] = [];
       if (isTeacherOrAdmin) {
         try {
-          const wsData = await fetchWorkspaces();
+          const [wsData, subData] = await Promise.all([
+            fetchWorkspaces().catch(() => []),
+            fetchSubjects().catch(() => [])
+          ]);
           setWorkspaces(wsData);
-          const subPromises = wsData.map((ws) => fetchSubjects(ws.workspace_id).catch(() => []));
-          const subArrays = await Promise.all(subPromises);
-          availableSubjects = subArrays.flat();
+          availableSubjects = subData;
         } catch {
           // Ignore error
         }

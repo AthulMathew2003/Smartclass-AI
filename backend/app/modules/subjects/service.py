@@ -46,23 +46,32 @@ class SubjectService:
         self,
         user_id: uuid.UUID,
         org_id: uuid.UUID,
-        workspace_id: uuid.UUID,
+        workspace_id: Optional[uuid.UUID],
         is_org_admin: bool
     ) -> List[SubjectResponse]:
         """
         Visibility logic:
-        - All workspace members see all subjects in their workspace.
-        - Admin/Owner access is verified by RBAC at the API layer.
-        - Non-admin users must be workspace members (verified here).
+        - If workspace_id is provided:
+            - Org admins can view all subjects in that workspace.
+            - Non-admin users must be members of that workspace.
+        - If workspace_id is None (Global org-level query):
+            - Org admins see all subjects across all workspaces in the organization.
+            - Non-admin users see all subjects across workspaces they are members of.
         """
-        await self._verify_workspace_context(workspace_id, org_id)
+        if workspace_id is not None:
+            await self._verify_workspace_context(workspace_id, org_id)
 
-        if not is_org_admin:
-            is_ws_member = await self.repo.is_user_workspace_member(user_id, workspace_id)
-            if not is_ws_member:
-                raise ForbiddenException("Access denied. You are not a member of this workspace.")
+            if not is_org_admin:
+                is_ws_member = await self.repo.is_user_workspace_member(user_id, workspace_id)
+                if not is_ws_member:
+                    raise ForbiddenException("Access denied. You are not a member of this workspace.")
 
-        subjects = await self.repo.list_subjects_by_workspace(workspace_id)
+            subjects = await self.repo.list_subjects_by_workspace(workspace_id)
+        else:
+            if is_org_admin:
+                subjects = await self.repo.list_all_subjects_by_org(org_id)
+            else:
+                subjects = await self.repo.list_subjects_for_user_workspaces(org_id, user_id)
 
         result = []
         for s in subjects:
@@ -75,20 +84,24 @@ class SubjectService:
     async def get_subject(
         self,
         subject_id: uuid.UUID,
-        workspace_id: uuid.UUID,
+        workspace_id: Optional[uuid.UUID],
         org_id: uuid.UUID,
         requesting_user_id: Optional[uuid.UUID] = None,
         is_org_admin: bool = False
     ) -> SubjectResponse:
-        await self._verify_workspace_context(workspace_id, org_id)
-
         subject = await self.repo.get_subject_by_id(subject_id)
-        if not subject or subject.subject_workspace_id != workspace_id:
+        if not subject:
             raise NotFoundException("Subject not found.")
+
+        resolved_ws_id = workspace_id or subject.subject_workspace_id
+        if subject.subject_workspace_id != resolved_ws_id:
+            raise NotFoundException("Subject not found.")
+
+        await self._verify_workspace_context(resolved_ws_id, org_id)
 
         # Access check: workspace membership (not subject-level membership)
         if not is_org_admin and requesting_user_id:
-            is_ws_member = await self.repo.is_user_workspace_member(requesting_user_id, workspace_id)
+            is_ws_member = await self.repo.is_user_workspace_member(requesting_user_id, resolved_ws_id)
             if not is_ws_member:
                 raise ForbiddenException("Access denied. You are not a member of this workspace.")
 
@@ -127,16 +140,20 @@ class SubjectService:
         self,
         subject_id: uuid.UUID,
         org_id: uuid.UUID,
-        workspace_id: uuid.UUID,
+        workspace_id: Optional[uuid.UUID],
         payload: SubjectUpdateRequest,
         requesting_user_id: Optional[uuid.UUID] = None,
         is_org_admin: bool = False
     ) -> SubjectResponse:
-        await self._verify_workspace_context(workspace_id, org_id)
-
         subject = await self.repo.get_subject_by_id(subject_id)
-        if not subject or subject.subject_workspace_id != workspace_id:
+        if not subject:
             raise NotFoundException("Subject not found.")
+
+        resolved_ws_id = workspace_id or subject.subject_workspace_id
+        if subject.subject_workspace_id != resolved_ws_id:
+            raise NotFoundException("Subject not found.")
+
+        await self._verify_workspace_context(resolved_ws_id, org_id)
 
         if subject.subject_status == SubjectStatus.ARCHIVED:
             raise ForbiddenException("Cannot update an archived subject.")
@@ -148,7 +165,7 @@ class SubjectService:
                 raise ForbiddenException("Access denied. Only assigned teachers of this subject can update it.")
 
         if payload.subject_name and payload.subject_name.strip().lower() != subject.subject_name.lower():
-            if await self.repo.exists_subject_name(workspace_id, payload.subject_name, exclude_subject_id=subject_id):
+            if await self.repo.exists_subject_name(resolved_ws_id, payload.subject_name, exclude_subject_id=subject_id):
                 raise ConflictException(f"A subject named '{payload.subject_name}' already exists in this workspace.")
 
         updated_subject = await self.repo.update_subject(
@@ -166,13 +183,17 @@ class SubjectService:
         self,
         subject_id: uuid.UUID,
         org_id: uuid.UUID,
-        workspace_id: uuid.UUID
+        workspace_id: Optional[uuid.UUID] = None
     ) -> SubjectResponse:
-        await self._verify_workspace_context(workspace_id, org_id)
-
         subject = await self.repo.get_subject_by_id(subject_id)
-        if not subject or subject.subject_workspace_id != workspace_id:
+        if not subject:
             raise NotFoundException("Subject not found.")
+
+        resolved_ws_id = workspace_id or subject.subject_workspace_id
+        if subject.subject_workspace_id != resolved_ws_id:
+            raise NotFoundException("Subject not found.")
+
+        await self._verify_workspace_context(resolved_ws_id, org_id)
 
         if subject.subject_status == SubjectStatus.ARCHIVED:
             resp = SubjectResponse.model_validate(subject)
@@ -192,19 +213,23 @@ class SubjectService:
         self,
         subject_id: uuid.UUID,
         org_id: uuid.UUID,
-        workspace_id: uuid.UUID,
+        workspace_id: Optional[uuid.UUID] = None,
         requesting_user_id: Optional[uuid.UUID] = None,
         is_org_admin: bool = False
     ) -> List[SubjectTeacherResponse]:
-        await self._verify_workspace_context(workspace_id, org_id)
-
         subject = await self.repo.get_subject_by_id(subject_id)
-        if not subject or subject.subject_workspace_id != workspace_id:
+        if not subject:
             raise NotFoundException("Subject not found.")
+
+        resolved_ws_id = workspace_id or subject.subject_workspace_id
+        if subject.subject_workspace_id != resolved_ws_id:
+            raise NotFoundException("Subject not found.")
+
+        await self._verify_workspace_context(resolved_ws_id, org_id)
 
         # Access: workspace membership check (all ws members can view teachers)
         if not is_org_admin and requesting_user_id:
-            is_ws_member = await self.repo.is_user_workspace_member(requesting_user_id, workspace_id)
+            is_ws_member = await self.repo.is_user_workspace_member(requesting_user_id, resolved_ws_id)
             if not is_ws_member:
                 raise ForbiddenException("Access denied. You are not a member of this workspace.")
 

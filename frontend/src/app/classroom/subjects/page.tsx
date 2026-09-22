@@ -71,13 +71,11 @@ export default function SubjectsPage() {
     setLoading(true);
     setError(null);
     try {
-      const wsData = await fetchWorkspaces();
+      const [wsData, subjData] = await Promise.all([
+        fetchWorkspaces().catch(() => []),
+        fetchSubjects()
+      ]);
       setWorkspaces(wsData);
-
-      const subjectPromises = wsData.map(ws => fetchSubjects(ws.workspace_id).catch(() => []));
-      const subjectsArrays = await Promise.all(subjectPromises);
-      const subjData = subjectsArrays.flat();
-
       setSubjects(subjData);
     } catch (err: any) {
       setError(err.message || "Failed to load subjects.");

@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.subjects.models import Subject, SubjectTeacher, SubjectStatus
 from app.modules.organizations.models import (
     OrganizationMember, OrganizationMemberStatus,
-    WorkspaceMember, Workspace, Role
+    WorkspaceMember, Workspace, Role, WorkspaceStatus
 )
 
 
@@ -38,6 +38,35 @@ class SubjectRepository:
 
     async def list_subjects_by_workspace(self, workspace_id: uuid.UUID) -> List[Subject]:
         stmt = select(Subject).where(Subject.subject_workspace_id == workspace_id)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_all_subjects_by_org(self, org_id: uuid.UUID) -> List[Subject]:
+        stmt = (
+            select(Subject)
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .where(
+                Workspace.workspace_organization_id == org_id,
+                Workspace.workspace_status != WorkspaceStatus.ARCHIVED
+            )
+            .order_by(Subject.subject_created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_subjects_for_user_workspaces(self, org_id: uuid.UUID, user_id: uuid.UUID) -> List[Subject]:
+        stmt = (
+            select(Subject)
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .join(WorkspaceMember, Workspace.workspace_id == WorkspaceMember.workspace_member_workspace_id)
+            .where(
+                Workspace.workspace_organization_id == org_id,
+                WorkspaceMember.workspace_member_user_id == user_id,
+                Workspace.workspace_status != WorkspaceStatus.ARCHIVED
+            )
+            .order_by(Subject.subject_created_at.desc())
+            .distinct()
+        )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

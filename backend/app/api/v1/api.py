@@ -6,6 +6,7 @@ from app.modules.rbac.router import router as rbac_router
 from app.api.v1.subjects import router as subject_router
 from app.api.v1.profile_photo import router as profile_photo_router
 from app.api.v1.assignments import router as assignment_router
+from app.api.v1.assessments import router as assessment_router
 
 router = APIRouter()
 
@@ -14,6 +15,8 @@ router.include_router(org_router, prefix="/organizations", tags=["Organizations"
 router.include_router(workspace_router, prefix="/workspaces", tags=["Workspaces"])
 router.include_router(subject_router, prefix="/subjects", tags=["Subjects"])
 router.include_router(assignment_router, prefix="/assignments", tags=["Assignments"])
+router.include_router(assessment_router, prefix="/assessments", tags=["Assessments"])
 router.include_router(rbac_router, prefix="/roles", tags=["Roles & RBAC"])
 router.include_router(profile_photo_router, prefix="/users", tags=["Profile Photos"])
+
 

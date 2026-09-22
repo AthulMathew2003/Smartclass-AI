@@ -10,10 +10,17 @@ from app.modules.organizations.models import (  # noqa: F401
     WorkspaceMember
 )
 from app.modules.rbac.models import Permission, RolePermission  # noqa: F401
-from app.modules.subjects.models import Subject, SubjectTeacher  # noqa: F401
+from app.modules.subjects.models import Subject, SubjectTeacher, SubjectMaterial  # noqa: F401
 from app.modules.assignments.models import (  # noqa: F401
     Assignment,
     AssignmentAttachment,
     AssignmentSubmission,
     SubmissionAttachment
 )
+from app.modules.assessments.models import (  # noqa: F401
+    Assessment,
+    QuestionBankItem,
+    AssessmentQuestion,
+    QuestionOption
+)
+

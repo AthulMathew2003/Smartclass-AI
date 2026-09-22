@@ -43,8 +43,9 @@ export async function fetchSubjects(workspaceId?: string): Promise<Subject[]> {
   return await apiFetch<Subject[]>(`/subjects${query}`);
 }
 
-export async function fetchSubject(id: string, workspaceId: string): Promise<Subject> {
-  return await apiFetch<Subject>(`/subjects/${id}?workspace_id=${workspaceId}`);
+export async function fetchSubject(id: string, workspaceId?: string): Promise<Subject> {
+  const query = workspaceId ? `?workspace_id=${workspaceId}` : "";
+  return await apiFetch<Subject>(`/subjects/${id}${query}`);
 }
 
 export async function createSubject(payload: SubjectCreatePayload): Promise<Subject> {
