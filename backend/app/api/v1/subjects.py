@@ -15,6 +15,11 @@ from app.modules.subjects.schemas import (
     SubjectTeacherAddRequest,
     SubjectTeacherResponse
 )
+from app.modules.assessments.schemas import (
+    SubjectLearningAnalyticsResponse,
+    SubjectQuestionDifficultyResponse,
+    ClassPerformanceDashboardResponse
+)
 
 router = APIRouter()
 
@@ -324,6 +329,71 @@ async def delete_subject_question(
     )
     await db.commit()
     return {"message": "Question deleted successfully from question bank", "question_id": str(question_id)}
+
+
+@router.get("/{subject_id}/analytics/learning", response_model=SubjectLearningAnalyticsResponse)
+async def get_subject_learning_analytics(
+    subject_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("subject.read"))
+):
+    """Retrieve subject-level learning analytics overview across assessments (Teachers/Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_subject_learning_analytics(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/{subject_id}/analytics/question-difficulty", response_model=SubjectQuestionDifficultyResponse)
+async def get_subject_question_difficulty_analytics(
+    subject_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("subject.read"))
+):
+    """Retrieve descriptive question difficulty analytics for a subject (Teachers/Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_subject_question_difficulty_analytics(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/{subject_id}/performance", response_model=ClassPerformanceDashboardResponse)
+async def get_subject_class_performance(
+    subject_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("subject.read"))
+):
+    """
+    Retrieve consolidated class performance dashboard for a subject (Teachers/Admins only).
+    """
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_class_performance_dashboard(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
 
 
 from app.api.v1.materials import router as materials_router

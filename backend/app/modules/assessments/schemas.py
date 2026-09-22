@@ -1,10 +1,21 @@
 import uuid
+from enum import Enum
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices, field_validator, model_validator
-from app.modules.assessments.models import AssessmentType, AssessmentStatus, QuestionType, QuestionStatus
+from app.modules.assessments.models import (
+    AssessmentType,
+    AssessmentStatus,
+    QuestionType,
+    QuestionStatus,
+    AttemptStatus,
+    ResultStatus,
+    GradingStatus,
+    CorrectnessStatus
+)
 from app.core.exceptions import ValidationException
+
 
 
 # ── Assessment Schemas ──────────────────────────────────────────
@@ -24,6 +35,7 @@ class AssessmentCreateRequest(BaseModel):
     passing_marks: Optional[Decimal] = Field(None, ge=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("passing_marks", "assessment_passing_marks"), description="Passing marks threshold")
     attempt_limit: int = Field(1, ge=1, validation_alias=AliasChoices("attempt_limit", "assessment_attempt_limit"), description="Maximum attempts allowed")
     randomize_questions: bool = Field(False, validation_alias=AliasChoices("randomize_questions", "assessment_randomize_questions"), description="Whether to randomize question order for students")
+    leaderboard_enabled: bool = Field(False, validation_alias=AliasChoices("leaderboard_enabled", "assessment_leaderboard_enabled"), description="Whether leaderboard ranking is enabled")
 
     @field_validator("title")
     @classmethod
@@ -96,6 +108,7 @@ class AssessmentUpdateRequest(BaseModel):
     passing_marks: Optional[Decimal] = Field(None, ge=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("passing_marks", "assessment_passing_marks"))
     attempt_limit: Optional[int] = Field(None, ge=1, validation_alias=AliasChoices("attempt_limit", "assessment_attempt_limit"))
     randomize_questions: Optional[bool] = Field(None, validation_alias=AliasChoices("randomize_questions", "assessment_randomize_questions"))
+    leaderboard_enabled: Optional[bool] = Field(None, validation_alias=AliasChoices("leaderboard_enabled", "assessment_leaderboard_enabled"))
 
     @field_validator("title")
     @classmethod
@@ -173,6 +186,7 @@ class AssessmentResponse(BaseModel):
     assessment_passing_marks: Optional[Decimal] = Field(None, validation_alias=AliasChoices("assessment_passing_marks", "passing_marks"))
     assessment_attempt_limit: int = Field(1, validation_alias=AliasChoices("assessment_attempt_limit", "attempt_limit"))
     assessment_randomize_questions: bool = Field(False, validation_alias=AliasChoices("assessment_randomize_questions", "randomize_questions"))
+    assessment_leaderboard_enabled: bool = Field(False, validation_alias=AliasChoices("assessment_leaderboard_enabled", "leaderboard_enabled"))
     assessment_created_by: Optional[uuid.UUID] = Field(None, validation_alias=AliasChoices("assessment_created_by", "created_by"))
     assessment_created_at: datetime = Field(..., validation_alias=AliasChoices("assessment_created_at", "created_at"))
     assessment_updated_at: datetime = Field(..., validation_alias=AliasChoices("assessment_updated_at", "updated_at"))
@@ -445,8 +459,535 @@ class StudentAssessmentQuestionResponse(BaseModel):
     options: List[StudentQuestionOptionResponse] = Field(default_factory=list)
 
 
+# ── Assessment Attempt & Taking Schemas ────────────────────────
+
+class StudentAttemptAnswerInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    selected_option_id: Optional[uuid.UUID] = Field(None, validation_alias=AliasChoices("selected_option_id", "selectedOptionId", "option_id"))
+    selected_option_ids: Optional[List[uuid.UUID]] = Field(None, validation_alias=AliasChoices("selected_option_ids", "selectedOptionIds", "option_ids"))
+    text_answer: Optional[str] = Field(None, validation_alias=AliasChoices("text_answer", "textAnswer", "answer_text"))
+
+    @field_validator("text_answer")
+    @classmethod
+    def sanitize_text(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            trimmed = v.strip()
+            return trimmed if trimmed else None
+        return None
+
+
+class StudentAttemptQuestionResponse(BaseModel):
+    """Sanitized question delivered to student during attempt with their current answer."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_question_id: uuid.UUID = Field(..., validation_alias=AliasChoices("assessment_question_id", "id", "question_id"))
+    assessment_question_order: int = Field(..., validation_alias=AliasChoices("assessment_question_order", "order", "order_index"))
+    assessment_question_marks: Decimal = Field(..., validation_alias=AliasChoices("assessment_question_marks", "marks"))
+    question_type: QuestionType = Field(..., validation_alias=AliasChoices("question_type", "type"))
+    question_text: str = Field(..., validation_alias=AliasChoices("question_text", "text"))
+    options: List[StudentQuestionOptionResponse] = Field(default_factory=list)
+    current_answer: Optional[Dict[str, Any]] = None
+
+
+class AssessmentAttemptResponse(BaseModel):
+    """Full attempt response for student exam taking."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    attempt_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_id", "id"))
+    attempt_assessment_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_assessment_id", "assessment_id"))
+    attempt_student_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_student_id", "student_id"))
+    attempt_number: int = Field(..., validation_alias=AliasChoices("attempt_number", "number"))
+    attempt_status: AttemptStatus = Field(..., validation_alias=AliasChoices("attempt_status", "status"))
+    attempt_started_at: datetime = Field(..., validation_alias=AliasChoices("attempt_started_at", "started_at"))
+    attempt_expires_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("attempt_expires_at", "expires_at"))
+    attempt_submitted_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("attempt_submitted_at", "submitted_at"))
+    attempt_question_order: Optional[List[str]] = Field(default_factory=list)
+
+    # Question payload and answers map
+    total_questions: int = 0
+    questions: List[StudentAttemptQuestionResponse] = Field(default_factory=list)
+    answers: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AssessmentAttemptSummaryResponse(BaseModel):
+    """Summary of student's past or current attempt."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    attempt_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_id", "id"))
+    attempt_assessment_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_assessment_id", "assessment_id"))
+    attempt_student_id: uuid.UUID = Field(..., validation_alias=AliasChoices("attempt_student_id", "student_id"))
+    attempt_number: int = Field(..., validation_alias=AliasChoices("attempt_number", "number"))
+    attempt_status: AttemptStatus = Field(..., validation_alias=AliasChoices("attempt_status", "status"))
+    attempt_started_at: datetime = Field(..., validation_alias=AliasChoices("attempt_started_at", "started_at"))
+    attempt_expires_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("attempt_expires_at", "expires_at"))
+    attempt_submitted_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("attempt_submitted_at", "submitted_at"))
+
+
 # Aliases for backward compatibility
 QuestionCreateRequest = AssessmentCreateAndAddQuestionRequest
 QuestionUpdateRequest = AssessmentQuestionUpdateRequest
 QuestionResponse = AssessmentQuestionResponse
 StudentQuestionResponse = StudentAssessmentQuestionResponse
+
+
+# ── Assessment Evaluation & Result Schemas ──────────────────────
+
+class ManualGradeInput(BaseModel):
+    """Payload submitted by a teacher to grade a short answer question."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    marks_awarded: Decimal = Field(..., ge=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("marks_awarded", "marks", "score"))
+    feedback: Optional[str] = Field(None, max_length=5000, validation_alias=AliasChoices("feedback", "comments", "teacher_feedback"))
+
+    @field_validator("marks_awarded")
+    @classmethod
+    def validate_marks(cls, v: Decimal) -> Decimal:
+        if v < 0:
+            raise ValidationException("Marks awarded cannot be negative.")
+        return v
+
+    @field_validator("feedback")
+    @classmethod
+    def sanitize_feedback(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            trimmed = v.strip()
+            return trimmed if trimmed else None
+        return None
+
+
+class AssessmentResultQuestionResponse(BaseModel):
+    """Detailed review of a single question evaluation."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    result_question_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_question_id", "id"))
+    assessment_question_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_question_assessment_question_id", "assessment_question_id"))
+    order: int
+    question_type: QuestionType
+    question_text: str
+    question_explanation: Optional[str] = None
+    options: List[QuestionOptionResponse] = Field(default_factory=list)
+    answer_value: Optional[Dict[str, Any]] = None
+    marks_available: Decimal = Field(..., validation_alias=AliasChoices("result_question_marks_available", "marks_available"))
+    marks_awarded: Decimal = Field(..., validation_alias=AliasChoices("result_question_marks_awarded", "marks_awarded"))
+    correctness: CorrectnessStatus = Field(..., validation_alias=AliasChoices("result_question_correctness", "correctness"))
+    grading_status: GradingStatus = Field(..., validation_alias=AliasChoices("result_question_grading_status", "grading_status"))
+    feedback: Optional[str] = Field(None, validation_alias=AliasChoices("result_question_feedback", "feedback"))
+    graded_by: Optional[uuid.UUID] = Field(None, validation_alias=AliasChoices("result_question_graded_by", "graded_by"))
+    graded_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("result_question_graded_at", "graded_at"))
+
+
+class AssessmentResultResponse(BaseModel):
+    """Complete assessment attempt evaluation result."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    result_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_id", "id"))
+    attempt_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_attempt_id", "attempt_id"))
+    assessment_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_assessment_id", "assessment_id"))
+    student_id: uuid.UUID = Field(..., validation_alias=AliasChoices("result_student_id", "student_id"))
+    assessment_title: Optional[str] = None
+    attempt_number: int = 1
+    attempt_status: AttemptStatus = AttemptStatus.SUBMITTED
+    attempt_started_at: datetime
+    attempt_submitted_at: Optional[datetime] = None
+    total_marks: Decimal = Field(..., validation_alias=AliasChoices("result_total_marks", "total_marks"))
+    obtained_marks: Decimal = Field(..., validation_alias=AliasChoices("result_obtained_marks", "obtained_marks"))
+    percentage: Decimal = Field(..., validation_alias=AliasChoices("result_percentage", "percentage"))
+    passed: Optional[bool] = Field(None, validation_alias=AliasChoices("result_passed", "passed"))
+    status: ResultStatus = Field(..., validation_alias=AliasChoices("result_status", "status"))
+    correct_count: int = Field(0, validation_alias=AliasChoices("result_correct_count", "correct_count"))
+    incorrect_count: int = Field(0, validation_alias=AliasChoices("result_incorrect_count", "incorrect_count"))
+    unanswered_count: int = Field(0, validation_alias=AliasChoices("result_unanswered_count", "unanswered_count"))
+    pending_count: int = Field(0, validation_alias=AliasChoices("result_pending_count", "pending_count"))
+    graded_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("result_graded_at", "graded_at"))
+    questions: List[AssessmentResultQuestionResponse] = Field(default_factory=list)
+
+
+class TeacherAssessmentResultSummaryResponse(BaseModel):
+    """Summary of a student's attempt result for teacher tables."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    result_id: Optional[uuid.UUID] = None
+    attempt_id: uuid.UUID
+    student_id: uuid.UUID
+    student_name: Optional[str] = None
+    student_email: Optional[str] = None
+    attempt_number: int
+    attempt_status: AttemptStatus
+    total_marks: Decimal
+    obtained_marks: Decimal
+    percentage: Decimal
+    passed: Optional[bool] = None
+    status: ResultStatus
+    pending_count: int = 0
+    started_at: datetime
+    submitted_at: Optional[datetime] = None
+
+
+# ── Assessment Analytics Schemas (Step 10.11) ─────────────────
+
+class AssessmentAnalyticsOverview(BaseModel):
+    """High-level assessment metrics and rates."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    total_enrolled_students: int = 0
+    total_students_attempted: int = 0
+    total_attempts: int = 0
+    total_submitted_attempts: int = 0
+    total_expired_attempts: int = 0
+    total_in_progress_attempts: int = 0
+    total_completed_evaluations: int = 0
+    total_pending_manual_grading: int = 0
+    total_passed: int = 0
+    total_failed: int = 0
+    pass_percentage: Optional[float] = None
+    participation_rate: Optional[float] = None
+
+
+class AssessmentScoreStatistics(BaseModel):
+    """Score distributions and extremes across completed evaluations."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    average_percentage: Optional[float] = None
+    median_percentage: Optional[float] = None
+    highest_percentage: Optional[float] = None
+    lowest_percentage: Optional[float] = None
+    average_obtained_marks: Optional[float] = None
+    total_marks: float = 0.0
+    passing_marks: Optional[float] = None
+
+
+class AssessmentAttemptStatistics(BaseModel):
+    """Attempt counts and distribution metrics."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    total_attempts: int = 0
+    average_attempts_per_student: Optional[float] = None
+    single_attempt_student_count: int = 0
+    multiple_attempts_student_count: int = 0
+
+
+class AssessmentQuestionAnalyticsItem(BaseModel):
+    """Statistical performance metrics for an individual assessment question."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_question_id: uuid.UUID
+    question_order: int
+    question_type: QuestionType
+    question_text: str
+    marks_available: float
+    evaluated_count: int = 0
+    correct_count: int = 0
+    incorrect_count: int = 0
+    unanswered_count: int = 0
+    pending_count: int = 0
+    average_marks_awarded: Optional[float] = None
+    accuracy_percentage: Optional[float] = None
+
+
+class AssessmentStudentAttemptItem(BaseModel):
+    """Summary of a specific attempt by a student."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    attempt_id: uuid.UUID
+    attempt_number: int
+    attempt_status: AttemptStatus
+    started_at: datetime
+    submitted_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    obtained_marks: Optional[float] = None
+    percentage: Optional[float] = None
+    passed: Optional[bool] = None
+    status: Optional[ResultStatus] = None
+    pending_count: int = 0
+
+
+class AssessmentStudentPerformanceItem(BaseModel):
+    """Aggregated assessment performance for an individual student."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    student_id: uuid.UUID
+    student_name: Optional[str] = None
+    student_email: Optional[str] = None
+    total_attempts: int = 0
+    latest_attempt_number: int = 1
+    latest_attempt_status: AttemptStatus
+    latest_percentage: Optional[float] = None
+    latest_obtained_marks: Optional[float] = None
+    latest_passed: Optional[bool] = None
+    latest_result_status: Optional[ResultStatus] = None
+    best_percentage: Optional[float] = None
+    best_obtained_marks: Optional[float] = None
+    has_pending_grading: bool = False
+    attempts: List[AssessmentStudentAttemptItem] = Field(default_factory=list)
+
+
+class AssessmentAnalyticsResponse(BaseModel):
+    """Complete class-wide assessment analytics payload for Teachers and Admins."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_id: uuid.UUID
+    assessment_title: str
+    assessment_type: AssessmentType
+    assessment_status: AssessmentStatus
+    overview: AssessmentAnalyticsOverview
+    score_statistics: AssessmentScoreStatistics
+    attempt_statistics: AssessmentAttemptStatistics
+    question_statistics: List[AssessmentQuestionAnalyticsItem] = Field(default_factory=list)
+    student_statistics: List[AssessmentStudentPerformanceItem] = Field(default_factory=list)
+
+
+class StudentSelfAnalyticsResponse(BaseModel):
+    """Student self-performance and attempt progression analytics."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_id: uuid.UUID
+    assessment_title: str
+    assessment_total_marks: float
+    attempt_limit: int
+    total_attempts_used: int
+    attempts_remaining: int
+    latest_percentage: Optional[float] = None
+    latest_obtained_marks: Optional[float] = None
+    best_percentage: Optional[float] = None
+    best_obtained_marks: Optional[float] = None
+    passed: Optional[bool] = None
+    has_pending_grading: bool = False
+    attempts: List[AssessmentStudentAttemptItem] = Field(default_factory=list)
+
+
+# ── Learning Analytics & Question Difficulty Schemas (Step 10.12) ───
+
+class ObservedDifficultyBand(str, Enum):
+    EASIER_OBSERVED = "easier_observed"
+    MODERATE_OBSERVED = "moderate_observed"
+    HARDER_OBSERVED = "harder_observed"
+    INSUFFICIENT_SAMPLE = "insufficient_sample"
+
+
+class StudentLearningOverview(BaseModel):
+    """High-level longitudinal learning overview for a student."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    total_assessments_attempted: int = 0
+    total_assessments_completed: int = 0
+    total_assessments_pending_grading: int = 0
+    total_attempts_count: int = 0
+    average_percentage: Optional[float] = None
+    best_percentage: Optional[float] = None
+    latest_percentage: Optional[float] = None
+    total_passed_count: int = 0
+    total_failed_count: int = 0
+
+
+class StudentPerformanceTrendPoint(BaseModel):
+    """A chronological assessment result data point."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_id: uuid.UUID
+    assessment_title: str
+    subject_id: uuid.UUID
+    subject_name: str
+    attempt_id: uuid.UUID
+    attempt_number: int
+    date: datetime
+    percentage: Optional[float] = None
+    obtained_marks: Optional[float] = None
+    total_marks: float = 0.0
+    passed: Optional[bool] = None
+    status: ResultStatus
+
+
+class StudentLearningTrend(BaseModel):
+    """Longitudinal trend metrics comparing recent performance to history."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    recent_average_percentage: Optional[float] = None
+    historical_average_percentage: Optional[float] = None
+    improvement_from_previous: Optional[float] = None
+    recent_window_size: int = 5
+
+
+class StudentSubjectPerformanceItem(BaseModel):
+    """Student performance aggregated by Subject."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    subject_id: uuid.UUID
+    subject_name: str
+    assessments_attempted: int = 0
+    assessments_completed: int = 0
+    average_percentage: Optional[float] = None
+    best_percentage: Optional[float] = None
+    latest_percentage: Optional[float] = None
+    objective_accuracy_percentage: Optional[float] = None
+    passed_count: int = 0
+    failed_count: int = 0
+
+
+class StudentQuestionTypePerformanceItem(BaseModel):
+    """Performance breakdown by Question Type."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    question_type: QuestionType
+    evaluated_count: int = 0
+    correct_count: int = 0
+    incorrect_count: int = 0
+    unanswered_count: int = 0
+    pending_count: int = 0
+    accuracy_percentage: Optional[float] = None
+
+
+class StudentLearningAnalyticsResponse(BaseModel):
+    """Complete longitudinal learning analytics payload for a student."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    student_id: uuid.UUID
+    student_name: Optional[str] = None
+    student_email: Optional[str] = None
+    overview: StudentLearningOverview
+    trend: StudentLearningTrend
+    performance_progression: List[StudentPerformanceTrendPoint] = Field(default_factory=list)
+    subject_performance: List[StudentSubjectPerformanceItem] = Field(default_factory=list)
+    question_type_performance: List[StudentQuestionTypePerformanceItem] = Field(default_factory=list)
+    recent_assessments: List[StudentPerformanceTrendPoint] = Field(default_factory=list)
+
+
+class QuestionDifficultyAnalyticsItem(BaseModel):
+    """Observed descriptive difficulty metrics for an individual question."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    question_id: uuid.UUID
+    source_question_id: Optional[uuid.UUID] = None
+    question_text: str
+    question_type: QuestionType
+    marks_available: float
+    evaluated_count: int = 0
+    correct_count: int = 0
+    incorrect_count: int = 0
+    unanswered_count: int = 0
+    pending_count: int = 0
+    average_marks_awarded: Optional[float] = None
+    accuracy_percentage: Optional[float] = None
+    difficulty_band: ObservedDifficultyBand
+    difficulty_label: str
+    is_insufficient_sample: bool = False
+    assessment_count: int = 1
+
+
+class SubjectQuestionDifficultyResponse(BaseModel):
+    """Descriptive question difficulty analysis for a subject."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    subject_id: uuid.UUID
+    subject_name: str
+    total_questions_analyzed: int = 0
+    easier_count: int = 0
+    moderate_count: int = 0
+    harder_count: int = 0
+    insufficient_sample_count: int = 0
+    questions: List[QuestionDifficultyAnalyticsItem] = Field(default_factory=list)
+
+
+class SubjectLearningAnalyticsResponse(BaseModel):
+    """Subject-level learning progression and assessment performance."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    subject_id: uuid.UUID
+    subject_name: str
+    total_assessments: int = 0
+    total_students_enrolled: int = 0
+    total_students_attempted: int = 0
+    average_subject_percentage: Optional[float] = None
+    pass_rate_percentage: Optional[float] = None
+    total_evaluations_completed: int = 0
+    total_pending_manual_grading: int = 0
+    assessment_trends: List[Dict[str, Any]] = Field(default_factory=list)
+    question_difficulty_summary: Dict[str, int] = Field(default_factory=dict)
+
+
+# ── Step 10.13: Leaderboard & Class Performance Dashboard ────────────
+
+class AssessmentLeaderboardSettingsUpdateRequest(BaseModel):
+    """Payload to enable or disable leaderboard ranking for an assessment."""
+    enabled: bool = Field(..., description="Whether leaderboard ranking is enabled")
+
+
+class LeaderboardStudentBrief(BaseModel):
+    """Sanitized student profile information for leaderboard display."""
+    id: uuid.UUID
+    display_name: str
+    profile_image_url: Optional[str] = None
+
+
+class AssessmentLeaderboardEntryResponse(BaseModel):
+    """Individual ranked student entry on the leaderboard."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    rank: int
+    student: LeaderboardStudentBrief
+    percentage: float
+    obtained_marks: float
+    total_marks: float
+    attempts_used: int
+    completed_at: datetime
+    is_current_user: bool = False
+
+
+class AssessmentLeaderboardResponse(BaseModel):
+    """Authoritative leaderboard response for an assessment."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    assessment_id: uuid.UUID
+    assessment_title: str
+    leaderboard_enabled: bool
+    total_ranked_students: int
+    my_rank: Optional[int] = None
+    my_entry: Optional[AssessmentLeaderboardEntryResponse] = None
+    entries: List[AssessmentLeaderboardEntryResponse] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
+
+
+class ClassStudentPerformanceItem(BaseModel):
+    """Aggregated per-student performance row on the class dashboard."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    student_id: uuid.UUID
+    student_name: str
+    student_email: Optional[str] = None
+    assessments_completed: int = 0
+    average_percentage: Optional[float] = None
+    latest_percentage: Optional[float] = None
+    best_percentage: Optional[float] = None
+    passed_count: int = 0
+    pending_grading_count: int = 0
+    status_label: str = "Completed"
+
+
+class ClassPerformanceDashboardResponse(BaseModel):
+    """Consolidated class performance dashboard response for teachers and admins."""
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    subject_id: uuid.UUID
+    subject_name: str
+    workspace_id: uuid.UUID
+    workspace_name: str
+    total_students: int = 0
+    participating_students: int = 0
+    participation_rate_percentage: float = 0.0
+    total_assessments: int = 0
+    completed_evaluations: int = 0
+    class_average_percentage: Optional[float] = None
+    class_median_percentage: Optional[float] = None
+    class_pass_rate_percentage: Optional[float] = None
+    total_pending_manual_grading: int = 0
+    performance_trend: List[Dict[str, Any]] = Field(default_factory=list)
+    assessment_summaries: List[Dict[str, Any]] = Field(default_factory=list)
+    student_roster: List[ClassStudentPerformanceItem] = Field(default_factory=list)
+    question_difficulty_summary: Dict[str, int] = Field(default_factory=dict)
+
+
+
+
+

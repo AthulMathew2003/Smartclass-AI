@@ -55,6 +55,7 @@ class AssessmentPermission:
     UPDATE = "assessment.update"
     DELETE = "assessment.delete"
     PUBLISH = "assessment.publish"
+    GRADE = "assessment.grade"
 
 
 class QuestionPermission:

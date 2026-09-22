@@ -42,3 +42,9 @@ class StorageException(AppException):
     def __init__(self, message: str = "Storage operation failed.", code: str = "STORAGE_ERROR", status_code: int = 500):
         super().__init__(message=message, code=code, status_code=status_code)
 
+
+class AttemptExpiredException(AppException):
+    """Raised when a student attempts to interact with an expired assessment attempt."""
+    def __init__(self, message: str = "This assessment attempt has expired and can no longer be modified."):
+        super().__init__(message=message, code="ATTEMPT_EXPIRED", status_code=410)
+

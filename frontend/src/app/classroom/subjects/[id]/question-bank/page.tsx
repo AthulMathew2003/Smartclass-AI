@@ -581,7 +581,9 @@ export default function SubjectQuestionBankPage() {
               <div className="space-y-2.5 pt-2 border-t border-[var(--outline-variant)]">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-[var(--on-surface-variant)] block">
-                    Options & Answer Key (Click checkmark to mark correct)
+                    {formType === "true_false"
+                      ? "Select Correct Answer *"
+                      : "Options & Answer Key (Click checkmark to mark correct)"}
                   </Label>
                   {(formType === "mcq_single" || formType === "mcq_multiple") && (
                     <button
@@ -595,44 +597,86 @@ export default function SubjectQuestionBankPage() {
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  {formOptions.map((opt, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => toggleOptionCorrect(idx)}
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition ${
-                          opt.is_correct
-                            ? "bg-emerald-600 text-white shadow-sm"
-                            : "bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]"
-                        }`}
-                        title={opt.is_correct ? "Correct Answer" : "Mark as Correct"}
-                      >
-                        <span className="material-symbols-outlined text-[16px]">check</span>
-                      </button>
-                      <Input
-                        type="text"
-                        value={opt.option_text}
-                        onChange={(e) => updateOptionText(idx, e.target.value)}
-                        placeholder={`Option ${idx + 1} text...`}
-                        disabled={formType === "true_false"}
-                        className="bg-[var(--surface-container-low)] text-xs h-9"
-                        required
-                      />
-                      {formType !== "true_false" && formOptions.length > 2 && (
-                        <Button
+                {formType === "true_false" ? (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    {[
+                      { label: "True", isCorrectDefault: true },
+                      { label: "False", isCorrectDefault: false },
+                    ].map((choice) => {
+                      const isSelected =
+                        formOptions.find(
+                          (o) => o.option_text.toLowerCase() === choice.label.toLowerCase()
+                        )?.is_correct ?? choice.isCorrectDefault;
+
+                      return (
+                        <button
                           type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeOption(idx)}
-                          className="h-8 w-8 text-[var(--on-surface-variant)] hover:text-red-600 hover:bg-red-500/10"
+                          key={choice.label}
+                          onClick={() => {
+                            setFormOptions([
+                              { option_text: "True", option_order: 1, is_correct: choice.label === "True" },
+                              { option_text: "False", option_order: 2, is_correct: choice.label === "False" },
+                            ]);
+                          }}
+                          className={`flex items-center justify-between p-3.5 rounded-xl border text-sm font-semibold transition ${
+                            isSelected
+                              ? "bg-emerald-500/15 border-emerald-500 text-emerald-800 dark:text-emerald-300 shadow-sm ring-1 ring-emerald-500"
+                              : "bg-[var(--surface-container-low)] border-[var(--outline-variant)] text-[var(--on-surface-variant)] hover:bg-[var(--surface-container-high)]"
+                          }`}
                         >
-                          <span className="material-symbols-outlined text-[16px]">delete</span>
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                          <span className="font-bold">{choice.label}</span>
+                          <div
+                            className={`w-6 h-6 rounded-lg flex items-center justify-center transition ${
+                              isSelected
+                                ? "bg-emerald-600 text-white"
+                                : "bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]"
+                            }`}
+                          >
+                            {isSelected && <span className="material-symbols-outlined text-[16px]">check</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {formOptions.map((opt, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleOptionCorrect(idx)}
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition ${
+                            opt.is_correct
+                              ? "bg-emerald-600 text-white shadow-sm"
+                              : "bg-[var(--surface-container-high)] text-[var(--on-surface-variant)]"
+                          }`}
+                          title={opt.is_correct ? "Correct Answer" : "Mark as Correct"}
+                        >
+                          <span className="material-symbols-outlined text-[16px]">check</span>
+                        </button>
+                        <Input
+                          type="text"
+                          value={opt.option_text}
+                          onChange={(e) => updateOptionText(idx, e.target.value)}
+                          placeholder={`Option ${idx + 1} text...`}
+                          className="bg-[var(--surface-container-low)] text-xs h-9"
+                          required
+                        />
+                        {formOptions.length > 2 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeOption(idx)}
+                            className="h-8 w-8 text-[var(--on-surface-variant)] hover:text-red-600 hover:bg-red-500/10"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

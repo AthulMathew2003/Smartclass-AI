@@ -22,7 +22,7 @@ const NAV_CONFIG = [
   { name: "Assessments",         href: "/classroom/assessments",    icon: "quiz",                 permission: "assessment.read" },
   { name: "Members",             href: "/classroom/members",        icon: "group",                permission: "member.read" },
   { name: "Roles & Permissions", href: "/classroom/settings/roles", icon: "admin_panel_settings", permission: "member.update" },
-  { name: "Analytics",           href: "/classroom/analytics",      icon: "analytics",            permission: "analytics.view" },
+  { name: "Analytics",           href: "/classroom/analytics",      icon: "analytics",            permission: "assessment.read" },
   { name: "Settings",            href: "/classroom/settings",       icon: "settings",             permission: "settings.manage" },
 ];
 

@@ -20,7 +20,20 @@ from app.modules.assessments.schemas import (
     AssessmentQuestionUpdateRequest,
     QuestionReorderRequest,
     AssessmentQuestionResponse,
-    StudentAssessmentQuestionResponse
+    StudentAssessmentQuestionResponse,
+    AssessmentAttemptResponse,
+    AssessmentAttemptSummaryResponse,
+    StudentAttemptAnswerInput,
+    ManualGradeInput,
+    AssessmentResultResponse,
+    TeacherAssessmentResultSummaryResponse,
+    AssessmentAnalyticsResponse,
+    StudentSelfAnalyticsResponse,
+    StudentLearningAnalyticsResponse,
+    SubjectQuestionDifficultyResponse,
+    SubjectLearningAnalyticsResponse,
+    AssessmentLeaderboardResponse,
+    AssessmentLeaderboardSettingsUpdateRequest
 )
 
 router = APIRouter()
@@ -69,6 +82,90 @@ async def create_assessment(
         created_by_user_id=current_user.user_id,
         is_org_admin=is_org_admin,
         payload=payload
+    )
+    await db.commit()
+    return res
+
+
+# ── Longitudinal Learning Analytics (Step 10.12) ───────────────
+
+@router.get("/analytics/learning/me", response_model=StudentLearningAnalyticsResponse)
+async def get_my_learning_analytics(
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Retrieve longitudinal learning analytics for the authenticated student."""
+    service = AssessmentService(db)
+    res = await service.get_student_learning_analytics(
+        org_id=org.organization_id,
+        target_student_id=current_user.user_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=False
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/analytics/learning/students/{student_id}", response_model=StudentLearningAnalyticsResponse)
+async def get_student_learning_analytics_for_teacher(
+    student_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Retrieve longitudinal learning analytics for a specific student (Teachers/Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_student_learning_analytics(
+        org_id=org.organization_id,
+        target_student_id=student_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/subjects/{subject_id}/analytics/learning", response_model=SubjectLearningAnalyticsResponse)
+async def get_subject_learning_analytics(
+    subject_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Retrieve subject-level learning analytics overview across assessments (Teachers/Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_subject_learning_analytics(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/subjects/{subject_id}/analytics/question-difficulty", response_model=SubjectQuestionDifficultyResponse)
+async def get_subject_question_difficulty_analytics(
+    subject_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Retrieve descriptive question difficulty analytics for a subject (Teachers/Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_subject_question_difficulty_analytics(
+        org_id=org.organization_id,
+        subject_id=subject_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
     )
     await db.commit()
     return res
@@ -388,3 +485,282 @@ async def remove_assessment_question(
     )
     await db.commit()
     return {"message": "Question removed from assessment successfully", "assessment_question_id": str(assessment_question_id)}
+
+
+# ── Exam Attempts & Taking Flow Endpoints ───────────────────────
+
+@router.post("/{assessment_id}/start", response_model=AssessmentAttemptResponse)
+async def start_assessment_attempt(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Start a new attempt or resume an existing in-progress attempt (Idempotent)."""
+    service = AssessmentService(db)
+    res = await service.start_or_get_in_progress_attempt(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        student_user_id=current_user.user_id
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/{assessment_id}/attempts", response_model=List[AssessmentAttemptSummaryResponse])
+async def list_student_assessment_attempts(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """List all previous and active attempts for the requesting student on an assessment."""
+    service = AssessmentService(db)
+    return await service.list_student_attempts(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        student_user_id=current_user.user_id
+    )
+
+
+@router.get("/{assessment_id}/attempts/{attempt_id}", response_model=AssessmentAttemptResponse)
+async def get_assessment_attempt(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Get attempt details and saved answers (sanitized for students, complete for teachers/admins)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    return await service.get_attempt(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+
+
+@router.put("/{assessment_id}/attempts/{attempt_id}/answers/{question_id}")
+async def save_attempt_answer(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: StudentAttemptAnswerInput,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Save or update student answer for a single question in an active attempt."""
+    service = AssessmentService(db)
+    res = await service.save_attempt_answer(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        question_id=question_id,
+        student_user_id=current_user.user_id,
+        payload=payload
+    )
+    await db.commit()
+    return res
+
+
+@router.post("/{assessment_id}/attempts/{attempt_id}/submit", response_model=AssessmentAttemptResponse)
+async def submit_assessment_attempt(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Submit an in-progress assessment attempt and trigger automatic evaluation."""
+    service = AssessmentService(db)
+    res = await service.submit_attempt(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        student_user_id=current_user.user_id
+    )
+    await db.commit()
+    return res
+
+
+# ── Assessment Evaluation & Result Endpoints ───────────────────
+
+@router.get("/{assessment_id}/attempts/{attempt_id}/result", response_model=AssessmentResultResponse)
+async def get_attempt_result(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Get the calculated and stored result for an assessment attempt."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_attempt_result(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.put("/{assessment_id}/attempts/{attempt_id}/questions/{question_id}/grade", response_model=AssessmentResultResponse)
+async def grade_attempt_question(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: ManualGradeInput,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.UPDATE))
+):
+    """Grade a student's answer for a specific question (e.g. Short Answer) and recalculate result."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.grade_question(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        question_id=question_id,
+        grader_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        payload=payload
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/{assessment_id}/results", response_model=List[TeacherAssessmentResultSummaryResponse])
+async def list_assessment_results(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """List all attempt results for an assessment (Teachers and Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.list_assessment_results(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+# ── Assessment Analytics Endpoints (Step 10.11) ─────────────────
+
+@router.get("/{assessment_id}/analytics", response_model=AssessmentAnalyticsResponse)
+async def get_assessment_analytics(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Get full class-wide analytics for an assessment (Teachers and Org Admins only)."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_assessment_analytics(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin
+    )
+    await db.commit()
+    return res
+
+
+@router.get("/{assessment_id}/analytics/self", response_model=StudentSelfAnalyticsResponse)
+async def get_student_self_analytics(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """Get student's own attempts and performance progression for an assessment."""
+    service = AssessmentService(db)
+    res = await service.get_student_self_analytics(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        student_user_id=current_user.user_id
+    )
+    await db.commit()
+    return res
+
+
+# ── Assessment Leaderboard Endpoints (Step 10.13) ───────────────
+
+@router.get("/{assessment_id}/leaderboard", response_model=AssessmentLeaderboardResponse)
+async def get_assessment_leaderboard(
+    assessment_id: uuid.UUID,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.READ))
+):
+    """
+    Get server-authoritative leaderboard rankings for an assessment.
+    Returns 0 entries if leaderboard is disabled and requester is a student.
+    """
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.get_assessment_leaderboard(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        page=page,
+        page_size=page_size
+    )
+    await db.commit()
+    return res
+
+
+@router.patch("/{assessment_id}/leaderboard-settings", response_model=AssessmentLeaderboardResponse)
+async def update_assessment_leaderboard_settings(
+    assessment_id: uuid.UUID,
+    payload: AssessmentLeaderboardSettingsUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.UPDATE))
+):
+    """
+    Enable or disable leaderboard rankings for an assessment (Teachers and Org Admins only).
+    """
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.update_assessment_leaderboard_settings(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        payload=payload
+    )
+    await db.commit()
+    return res
+
+
+
+

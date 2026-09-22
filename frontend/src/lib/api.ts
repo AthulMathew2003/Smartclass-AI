@@ -53,13 +53,19 @@ export async function apiFetch<T = any>(
 
   if (!res.ok) {
     let errorDetail = "An error occurred";
+    let errorCode: string | undefined;
     try {
       const errData = await res.json();
       errorDetail = errData?.detail || errData?.message || errData?.error?.message || errorDetail;
+      // Surface machine-readable error code (e.g. ATTEMPT_EXPIRED)
+      errorCode = errData?.errors?.code || errData?.code;
     } catch {
       // Ignored
     }
-    throw new Error(errorDetail);
+    const err = new Error(errorDetail) as Error & { status: number; code?: string };
+    err.status = res.status;
+    err.code = errorCode;
+    throw err;
   }
 
   // If status is 204 No Content, return null

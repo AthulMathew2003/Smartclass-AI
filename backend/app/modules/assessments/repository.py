@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from sqlalchemy import select, delete, and_, or_, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -15,7 +15,15 @@ from app.modules.assessments.models import (
     AssessmentQuestion,
     QuestionOption,
     QuestionType,
-    QuestionStatus
+    QuestionStatus,
+    AssessmentAttempt,
+    AssessmentAttemptAnswer,
+    AttemptStatus,
+    AssessmentResult,
+    AssessmentResultQuestion,
+    ResultStatus,
+    GradingStatus,
+    CorrectnessStatus
 )
 from app.modules.subjects.models import Subject, SubjectTeacher, SubjectStatus
 from app.modules.organizations.models import (
@@ -49,7 +57,8 @@ class AssessmentRepository:
         passing_marks: Optional[Decimal],
         attempt_limit: int,
         randomize_questions: bool,
-        created_by: Optional[uuid.UUID]
+        leaderboard_enabled: bool = False,
+        created_by: Optional[uuid.UUID] = None
     ) -> Assessment:
         assessment = Assessment(
             assessment_subject_id=subject_id,
@@ -64,6 +73,7 @@ class AssessmentRepository:
             assessment_passing_marks=passing_marks,
             assessment_attempt_limit=attempt_limit,
             assessment_randomize_questions=randomize_questions,
+            assessment_leaderboard_enabled=leaderboard_enabled,
             assessment_created_by=created_by
         )
         self.db.add(assessment)
@@ -267,7 +277,8 @@ class AssessmentRepository:
         total_marks: Optional[Decimal] = None,
         passing_marks: Optional[Decimal] = None,
         attempt_limit: Optional[int] = None,
-        randomize_questions: Optional[bool] = None
+        randomize_questions: Optional[bool] = None,
+        leaderboard_enabled: Optional[bool] = None
     ) -> Assessment:
         if title is not None:
             assessment.assessment_title = title
@@ -291,6 +302,8 @@ class AssessmentRepository:
             assessment.assessment_attempt_limit = attempt_limit
         if randomize_questions is not None:
             assessment.assessment_randomize_questions = randomize_questions
+        if leaderboard_enabled is not None:
+            assessment.assessment_leaderboard_enabled = leaderboard_enabled
 
         try:
             await self.db.flush()
@@ -651,3 +664,627 @@ class AssessmentRepository:
         )
         result = await self.db.execute(stmt)
         return result.scalars().first() is not None
+
+    # ── Attempt CRUD & Taking Flow ──────────────────────────────
+
+    async def create_assessment_attempt(
+        self,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID,
+        attempt_number: int,
+        question_order: List[str],
+        expires_at: Optional[datetime] = None
+    ) -> AssessmentAttempt:
+        attempt = AssessmentAttempt(
+            attempt_assessment_id=assessment_id,
+            attempt_student_id=student_id,
+            attempt_number=attempt_number,
+            attempt_status=AttemptStatus.IN_PROGRESS,
+            attempt_question_order=question_order,
+            attempt_expires_at=expires_at
+        )
+        attempt.answers = []
+        self.db.add(attempt)
+        try:
+            await self.db.flush()
+        except IntegrityError as e:
+            await self.db.rollback()
+            raise e
+        return attempt
+
+    async def get_student_in_progress_attempt(
+        self,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID
+    ) -> Optional[AssessmentAttempt]:
+        stmt = (
+            select(AssessmentAttempt)
+            .where(
+                and_(
+                    AssessmentAttempt.attempt_assessment_id == assessment_id,
+                    AssessmentAttempt.attempt_student_id == student_id,
+                    AssessmentAttempt.attempt_status == AttemptStatus.IN_PROGRESS
+                )
+            )
+            .options(
+                selectinload(AssessmentAttempt.answers),
+                selectinload(AssessmentAttempt.assessment).selectinload(Assessment.assessment_questions)
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().first()
+
+    async def count_student_attempts(
+        self,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID
+    ) -> int:
+        stmt = (
+            select(func.count(AssessmentAttempt.attempt_id))
+            .where(
+                and_(
+                    AssessmentAttempt.attempt_assessment_id == assessment_id,
+                    AssessmentAttempt.attempt_student_id == student_id
+                )
+            )
+        )
+        result = await self.db.execute(stmt)
+        return int(result.scalar() or 0)
+
+    async def get_attempt_by_id(
+        self,
+        attempt_id: uuid.UUID
+    ) -> Optional[AssessmentAttempt]:
+        stmt = (
+            select(AssessmentAttempt)
+            .where(AssessmentAttempt.attempt_id == attempt_id)
+            .options(
+                selectinload(AssessmentAttempt.answers),
+                selectinload(AssessmentAttempt.assessment).selectinload(Assessment.assessment_questions),
+                selectinload(AssessmentAttempt.assessment).selectinload(Assessment.subject).selectinload(Subject.workspace),
+                selectinload(AssessmentAttempt.student)
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_student_attempts(
+        self,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID
+    ) -> List[AssessmentAttempt]:
+        stmt = (
+            select(AssessmentAttempt)
+            .where(
+                and_(
+                    AssessmentAttempt.attempt_assessment_id == assessment_id,
+                    AssessmentAttempt.attempt_student_id == student_id
+                )
+            )
+            .options(
+                selectinload(AssessmentAttempt.answers)
+            )
+            .order_by(AssessmentAttempt.attempt_number.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_attempt_answer(
+        self,
+        attempt_id: uuid.UUID,
+        question_id: uuid.UUID
+    ) -> Optional[AssessmentAttemptAnswer]:
+        stmt = (
+            select(AssessmentAttemptAnswer)
+            .where(
+                and_(
+                    AssessmentAttemptAnswer.attempt_answer_attempt_id == attempt_id,
+                    AssessmentAttemptAnswer.attempt_answer_question_id == question_id
+                )
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def upsert_attempt_answer(
+        self,
+        attempt_id: uuid.UUID,
+        question_id: uuid.UUID,
+        answer_value: dict
+    ) -> AssessmentAttemptAnswer:
+        existing = await self.get_attempt_answer(attempt_id, question_id)
+        if existing:
+            existing.attempt_answer_value = answer_value
+            existing.attempt_answer_updated_at = datetime.now(timezone.utc)
+            await self.db.flush()
+            return existing
+        else:
+            answer = AssessmentAttemptAnswer(
+                attempt_answer_attempt_id=attempt_id,
+                attempt_answer_question_id=question_id,
+                attempt_answer_value=answer_value
+            )
+            self.db.add(answer)
+            try:
+                await self.db.flush()
+            except IntegrityError as e:
+                await self.db.rollback()
+                raise e
+            return answer
+
+    async def submit_attempt(
+        self,
+        attempt: AssessmentAttempt
+    ) -> AssessmentAttempt:
+        attempt.attempt_status = AttemptStatus.SUBMITTED
+        attempt.attempt_submitted_at = datetime.now(timezone.utc)
+        await self.db.flush()
+        refreshed = await self.get_attempt_by_id(attempt.attempt_id)
+        return refreshed or attempt
+
+    async def expire_attempt(
+        self,
+        attempt: AssessmentAttempt
+    ) -> AssessmentAttempt:
+        """Idempotently transition an in-progress attempt to EXPIRED status."""
+        if attempt.attempt_status != AttemptStatus.EXPIRED:
+            attempt.attempt_status = AttemptStatus.EXPIRED
+            attempt.attempt_submitted_at = datetime.now(timezone.utc)
+            await self.db.flush()
+        refreshed = await self.get_attempt_by_id(attempt.attempt_id)
+        return refreshed or attempt
+
+    # ── Assessment Evaluation & Result CRUD ─────────────────────
+
+    async def get_result_by_attempt_id(
+        self,
+        attempt_id: uuid.UUID
+    ) -> Optional[AssessmentResult]:
+        stmt = (
+            select(AssessmentResult)
+            .where(AssessmentResult.result_attempt_id == attempt_id)
+            .options(
+                selectinload(AssessmentResult.question_results).selectinload(AssessmentResultQuestion.assessment_question),
+                selectinload(AssessmentResult.attempt),
+                selectinload(AssessmentResult.assessment),
+                selectinload(AssessmentResult.student)
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_result_by_id(
+        self,
+        result_id: uuid.UUID
+    ) -> Optional[AssessmentResult]:
+        stmt = (
+            select(AssessmentResult)
+            .where(AssessmentResult.result_id == result_id)
+            .options(
+                selectinload(AssessmentResult.question_results).selectinload(AssessmentResultQuestion.assessment_question),
+                selectinload(AssessmentResult.attempt),
+                selectinload(AssessmentResult.assessment),
+                selectinload(AssessmentResult.student)
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def create_assessment_result(
+        self,
+        attempt_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID,
+        total_marks: Decimal,
+        obtained_marks: Decimal,
+        percentage: Decimal,
+        passed: Optional[bool],
+        status: ResultStatus,
+        correct_count: int,
+        incorrect_count: int,
+        unanswered_count: int,
+        pending_count: int,
+        graded_at: Optional[datetime]
+    ) -> AssessmentResult:
+        result = AssessmentResult(
+            result_attempt_id=attempt_id,
+            result_assessment_id=assessment_id,
+            result_student_id=student_id,
+            result_total_marks=total_marks,
+            result_obtained_marks=obtained_marks,
+            result_percentage=percentage,
+            result_passed=passed,
+            result_status=status,
+            result_correct_count=correct_count,
+            result_incorrect_count=incorrect_count,
+            result_unanswered_count=unanswered_count,
+            result_pending_count=pending_count,
+            result_graded_at=graded_at
+        )
+        self.db.add(result)
+        try:
+            await self.db.flush()
+        except IntegrityError as e:
+            await self.db.rollback()
+            raise e
+        return result
+
+    async def create_result_question(
+        self,
+        result_id: uuid.UUID,
+        assessment_question_id: uuid.UUID,
+        answer_value: Optional[dict],
+        marks_available: Decimal,
+        marks_awarded: Decimal,
+        correctness: CorrectnessStatus,
+        grading_status: GradingStatus,
+        feedback: Optional[str] = None,
+        graded_by: Optional[uuid.UUID] = None,
+        graded_at: Optional[datetime] = None
+    ) -> AssessmentResultQuestion:
+        rq = AssessmentResultQuestion(
+            result_question_result_id=result_id,
+            result_question_assessment_question_id=assessment_question_id,
+            result_question_answer_value=answer_value,
+            result_question_marks_available=marks_available,
+            result_question_marks_awarded=marks_awarded,
+            result_question_correctness=correctness,
+            result_question_grading_status=grading_status,
+            result_question_feedback=feedback,
+            result_question_graded_by=graded_by,
+            result_question_graded_at=graded_at
+        )
+        self.db.add(rq)
+        try:
+            await self.db.flush()
+        except IntegrityError as e:
+            await self.db.rollback()
+            raise e
+        return rq
+
+    async def get_result_question(
+        self,
+        result_id: uuid.UUID,
+        question_id: uuid.UUID
+    ) -> Optional[AssessmentResultQuestion]:
+        stmt = (
+            select(AssessmentResultQuestion)
+            .where(
+                and_(
+                    AssessmentResultQuestion.result_question_result_id == result_id,
+                    AssessmentResultQuestion.result_question_assessment_question_id == question_id
+                )
+            )
+            .options(
+                selectinload(AssessmentResultQuestion.assessment_question),
+                selectinload(AssessmentResultQuestion.grader)
+            )
+            .execution_options(populate_existing=True)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_assessment_results(
+        self,
+        assessment_id: uuid.UUID
+    ) -> List[AssessmentResult]:
+        stmt = (
+            select(AssessmentResult)
+            .where(AssessmentResult.result_assessment_id == assessment_id)
+            .options(
+                selectinload(AssessmentResult.question_results),
+                selectinload(AssessmentResult.attempt),
+                selectinload(AssessmentResult.student)
+            )
+            .order_by(AssessmentResult.result_created_at.desc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # ── Assessment Analytics Repository Methods (Step 10.11) ──────
+
+    async def get_workspace_student_count(self, workspace_id: uuid.UUID) -> int:
+        """Count total enrolled students in the workspace."""
+        stmt = (
+            select(func.count(WorkspaceMember.workspace_member_id))
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .where(
+                and_(
+                    WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                    Role.role_name.ilike("%student%")
+                )
+            )
+        )
+        res = await self.db.execute(stmt)
+        count = res.scalar_one()
+        if count == 0:
+            # Fallback to total workspace members if role names differ
+            fallback_stmt = select(func.count(WorkspaceMember.workspace_member_id)).where(
+                WorkspaceMember.workspace_member_workspace_id == workspace_id
+            )
+            fallback_res = await self.db.execute(fallback_stmt)
+            count = fallback_res.scalar_one()
+        return count
+
+    async def get_assessment_attempts_for_analytics(
+        self,
+        assessment_id: uuid.UUID
+    ) -> List[AssessmentAttempt]:
+        """Fetch all attempts for an assessment with student details and answers."""
+        stmt = (
+            select(AssessmentAttempt)
+            .where(AssessmentAttempt.attempt_assessment_id == assessment_id)
+            .options(
+                selectinload(AssessmentAttempt.student),
+                selectinload(AssessmentAttempt.answers)
+            )
+            .order_by(
+                AssessmentAttempt.attempt_student_id,
+                AssessmentAttempt.attempt_number.asc()
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_assessment_result_questions_for_analytics(
+        self,
+        assessment_id: uuid.UUID
+    ) -> List[AssessmentResultQuestion]:
+        """Fetch all result questions for an assessment."""
+        stmt = (
+            select(AssessmentResultQuestion)
+            .join(AssessmentResult, AssessmentResultQuestion.result_question_result_id == AssessmentResult.result_id)
+            .where(AssessmentResult.result_assessment_id == assessment_id)
+            .options(
+                selectinload(AssessmentResultQuestion.assessment_question)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_student_attempts_for_analytics(
+        self,
+        assessment_id: uuid.UUID,
+        student_id: uuid.UUID
+    ) -> List[AssessmentAttempt]:
+        """Fetch all attempts for a specific student and assessment."""
+        stmt = (
+            select(AssessmentAttempt)
+            .where(
+                and_(
+                    AssessmentAttempt.attempt_assessment_id == assessment_id,
+                    AssessmentAttempt.attempt_student_id == student_id
+                )
+            )
+            .options(
+                selectinload(AssessmentAttempt.student),
+                selectinload(AssessmentAttempt.answers)
+            )
+            .order_by(AssessmentAttempt.attempt_number.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # ── Learning Analytics & Question Difficulty Repository Methods (Step 10.12) ──
+
+    async def get_student_all_results_for_learning_analytics(
+        self,
+        student_id: uuid.UUID,
+        org_id: uuid.UUID
+    ) -> List[AssessmentResult]:
+        """Fetch all assessment results for a student across all subjects in the organization."""
+        stmt = (
+            select(AssessmentResult)
+            .join(Assessment, AssessmentResult.result_assessment_id == Assessment.assessment_id)
+            .join(Subject, Assessment.assessment_subject_id == Subject.subject_id)
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .where(
+                and_(
+                    AssessmentResult.result_student_id == student_id,
+                    Workspace.workspace_organization_id == org_id
+                )
+            )
+            .options(
+                selectinload(AssessmentResult.assessment).selectinload(Assessment.subject),
+                selectinload(AssessmentResult.attempt),
+                selectinload(AssessmentResult.student)
+            )
+            .order_by(AssessmentResult.result_created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_student_all_result_questions_for_learning_analytics(
+        self,
+        student_id: uuid.UUID,
+        org_id: uuid.UUID
+    ) -> List[AssessmentResultQuestion]:
+        """Fetch all result questions for a student across the organization."""
+        stmt = (
+            select(AssessmentResultQuestion)
+            .join(AssessmentResult, AssessmentResultQuestion.result_question_result_id == AssessmentResult.result_id)
+            .join(Assessment, AssessmentResult.result_assessment_id == Assessment.assessment_id)
+            .join(Subject, Assessment.assessment_subject_id == Subject.subject_id)
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .where(
+                and_(
+                    AssessmentResult.result_student_id == student_id,
+                    Workspace.workspace_organization_id == org_id
+                )
+            )
+            .options(
+                selectinload(AssessmentResultQuestion.assessment_question)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_subject_assessments_and_results_for_analytics(
+        self,
+        subject_id: uuid.UUID
+    ) -> List[Assessment]:
+        """Fetch all assessments under a subject with their questions and results."""
+        stmt = (
+            select(Assessment)
+            .where(Assessment.assessment_subject_id == subject_id)
+            .options(
+                selectinload(Assessment.assessment_questions),
+                selectinload(Assessment.results).selectinload(AssessmentResult.student),
+                selectinload(Assessment.attempts)
+            )
+            .order_by(Assessment.assessment_created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_subject_result_questions_for_difficulty_analytics(
+        self,
+        subject_id: uuid.UUID
+    ) -> List[AssessmentResultQuestion]:
+        """Fetch all result questions for all assessments in a subject."""
+        stmt = (
+            select(AssessmentResultQuestion)
+            .join(AssessmentResult, AssessmentResultQuestion.result_question_result_id == AssessmentResult.result_id)
+            .join(Assessment, AssessmentResult.result_assessment_id == Assessment.assessment_id)
+            .where(Assessment.assessment_subject_id == subject_id)
+            .options(
+                selectinload(AssessmentResultQuestion.assessment_question).selectinload(AssessmentQuestion.source_question)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_subject_assessment_questions(
+        self,
+        subject_id: uuid.UUID
+    ) -> List[AssessmentQuestion]:
+        """Fetch all assessment questions across all assessments in a subject."""
+        stmt = (
+            select(AssessmentQuestion)
+            .join(Assessment, AssessmentQuestion.assessment_question_assessment_id == Assessment.assessment_id)
+            .where(Assessment.assessment_subject_id == subject_id)
+            .options(
+                selectinload(AssessmentQuestion.source_question)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # ── Step 10.13: Leaderboard & Class Performance Repository Methods ──
+
+    async def update_assessment_leaderboard_setting(
+        self,
+        assessment_id: uuid.UUID,
+        enabled: bool
+    ) -> Optional[Assessment]:
+        """Update leaderboard enable/disable toggle for an assessment."""
+        assessment = await self.get_assessment_by_id(assessment_id)
+        if not assessment:
+            return None
+        assessment.assessment_leaderboard_enabled = enabled
+        self.db.add(assessment)
+        await self.db.flush()
+        return assessment
+
+    async def get_assessment_completed_results_for_leaderboard(
+        self,
+        assessment_id: uuid.UUID
+    ) -> List[AssessmentResult]:
+        """Fetch all completed results for an assessment with student and attempt information."""
+        stmt = (
+            select(AssessmentResult)
+            .where(
+                and_(
+                    AssessmentResult.result_assessment_id == assessment_id,
+                    AssessmentResult.result_status == ResultStatus.COMPLETED
+                )
+            )
+            .options(
+                selectinload(AssessmentResult.student),
+                selectinload(AssessmentResult.attempt)
+            )
+            .order_by(AssessmentResult.result_created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_student_attempts_count_for_assessment(
+        self,
+        assessment_id: uuid.UUID
+    ) -> Dict[uuid.UUID, int]:
+        """Return a mapping of student_id -> total attempts used for this assessment."""
+        stmt = (
+            select(
+                AssessmentAttempt.attempt_student_id,
+                func.count(AssessmentAttempt.attempt_id)
+            )
+            .where(AssessmentAttempt.attempt_assessment_id == assessment_id)
+            .group_by(AssessmentAttempt.attempt_student_id)
+        )
+        result = await self.db.execute(stmt)
+        return {row[0]: row[1] for row in result.all()}
+
+    async def get_workspace_students(
+        self,
+        workspace_id: uuid.UUID
+    ) -> List[User]:
+        """Fetch all enrolled students in a workspace."""
+        stmt = (
+            select(User)
+            .join(WorkspaceMember, User.user_id == WorkspaceMember.workspace_member_user_id)
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .where(
+                and_(
+                    WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                    func.lower(Role.role_name) == "student"
+                )
+            )
+            .order_by(User.user_first_name.asc(), User.user_last_name.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_workspace_student_count(
+        self,
+        workspace_id: uuid.UUID
+    ) -> int:
+        """Count all enrolled students in a workspace."""
+        stmt = (
+            select(func.count(WorkspaceMember.workspace_member_id))
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .where(
+                and_(
+                    WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                    func.lower(Role.role_name) == "student"
+                )
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar() or 0
+
+    async def get_subject_student_results_and_attempts(
+        self,
+        subject_id: uuid.UUID
+    ) -> List[AssessmentResult]:
+        """Fetch all assessment results for all assessments in a subject."""
+        stmt = (
+            select(AssessmentResult)
+            .join(Assessment, AssessmentResult.result_assessment_id == Assessment.assessment_id)
+            .where(Assessment.assessment_subject_id == subject_id)
+            .options(
+                selectinload(AssessmentResult.student),
+                selectinload(AssessmentResult.assessment),
+                selectinload(AssessmentResult.attempt)
+            )
+            .order_by(AssessmentResult.result_created_at.asc())
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+
+
+
