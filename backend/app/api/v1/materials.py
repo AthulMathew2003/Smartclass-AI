@@ -1,6 +1,7 @@
 import uuid
+import logging
 from typing import List, Optional
-from fastapi import APIRouter, Depends, status, Query
+from fastapi import APIRouter, Depends, status, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -20,7 +21,33 @@ from app.modules.subjects.material_schemas import (
     MaterialDownloadUrlResponse
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _background_index_material(
+    org_id: uuid.UUID,
+    subject_id: uuid.UUID,
+    material_id: uuid.UUID,
+    user_id: uuid.UUID,
+    is_org_admin: bool,
+):
+    from app.db.session import AsyncSessionLocal
+    from app.modules.rag.service import RagService
+    async with AsyncSessionLocal() as session:
+        try:
+            rag_service = RagService(session)
+            await rag_service.index_material(
+                org_id=org_id,
+                subject_id=subject_id,
+                material_id=material_id,
+                requesting_user_id=user_id,
+                is_org_admin=is_org_admin,
+            )
+            await session.commit()
+        except Exception as e:
+            logger.error(f"Background indexing failed for material {material_id}: {e}", exc_info=True)
 
 
 @router.post("/upload-url", response_model=MaterialUploadUrlResponse, status_code=status.HTTP_201_CREATED)
@@ -54,6 +81,7 @@ async def confirm_material_upload(
     subject_id: uuid.UUID,
     material_id: uuid.UUID,
     payload: MaterialConfirmRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     org: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -61,6 +89,7 @@ async def confirm_material_upload(
 ):
     """
     Confirm that an uploaded course material object exists in S3 and mark it active.
+    Triggers AI RAG indexing in the background.
     """
     service = SubjectMaterialService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
@@ -73,6 +102,17 @@ async def confirm_material_upload(
         payload=payload
     )
     await db.commit()
+
+    if getattr(res, "index_status", None) == "processing":
+        background_tasks.add_task(
+            _background_index_material,
+            org.organization_id,
+            subject_id,
+            material_id,
+            current_user.user_id,
+            is_org_admin
+        )
+
     return res
 
 

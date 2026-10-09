@@ -988,6 +988,53 @@ class ClassPerformanceDashboardResponse(BaseModel):
     question_difficulty_summary: Dict[str, int] = Field(default_factory=dict)
 
 
+# ── Bulk Question Upload Schemas ────────────────────────────────
+
+class BulkUploadValidationErrorItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    row: int
+    field: Optional[str] = None
+    message: str
+
+
+class BulkUploadPreviewItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    row: int
+    question_text: str
+    question_type: QuestionType
+    marks: Decimal
+    options_count: int = 0
+    correct_answer: Optional[str] = None
+    explanation: Optional[str] = None
+    order: Optional[int] = None
+    status: str = "valid"
+
+
+class BulkUploadValidateResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    valid: bool
+    total_rows: int
+    valid_rows: int
+    error_count: int
+    total_marks: Decimal
+    errors: List[BulkUploadValidationErrorItem] = Field(default_factory=list)
+    preview: List[BulkUploadPreviewItem] = Field(default_factory=list)
+
+
+class BulkUploadImportResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    success: bool = True
+    imported_count: int
+    total_marks_added: Decimal
+    assessment_total_marks: Decimal
+    questions: List[AssessmentQuestionResponse] = Field(default_factory=list)
+
+
+
 
 
 

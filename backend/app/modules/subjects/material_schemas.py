@@ -49,6 +49,10 @@ class MaterialResponse(BaseModel):
     content_type: str
     file_size: int
     status: str
+    index_status: Optional[str] = "pending"
+    indexed_at: Optional[datetime] = None
+    index_error: Optional[str] = None
+    chunk_count: Optional[int] = 0
     s3_key: str
     uploaded_by: Optional[MaterialUploaderSummary] = None
     created_at: datetime

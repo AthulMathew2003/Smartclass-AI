@@ -122,6 +122,7 @@ async def test_engine():
                 "attendance.view", "attendance.manage", "analytics.view"
             ],
             "Teacher": [
+                "member.read",
                 "workspace.read", "subject.create", "subject.read", "subject.update",
                 "subject.teacher.add", "subject.teacher.remove",
                 "subject.material.create", "subject.material.read", "subject.material.update", "subject.material.delete",

@@ -7,6 +7,8 @@ from app.api.v1.subjects import router as subject_router
 from app.api.v1.profile_photo import router as profile_photo_router
 from app.api.v1.assignments import router as assignment_router
 from app.api.v1.assessments import router as assessment_router
+from app.modules.rag.router import router as rag_router
+from app.modules.ai_tutor.router import router as ai_tutor_router
 
 router = APIRouter()
 
@@ -16,7 +18,10 @@ router.include_router(workspace_router, prefix="/workspaces", tags=["Workspaces"
 router.include_router(subject_router, prefix="/subjects", tags=["Subjects"])
 router.include_router(assignment_router, prefix="/assignments", tags=["Assignments"])
 router.include_router(assessment_router, prefix="/assessments", tags=["Assessments"])
+router.include_router(rag_router, prefix="/rag", tags=["RAG & Knowledge Base"])
+router.include_router(ai_tutor_router, prefix="/ai-tutor", tags=["AI Tutor"])
 router.include_router(rbac_router, prefix="/roles", tags=["Roles & RBAC"])
 router.include_router(profile_photo_router, prefix="/users", tags=["Profile Photos"])
+
 
 

@@ -206,11 +206,12 @@ async def test_me_permissions_endpoint(client: AsyncClient, db_session):
     assert data["organization_id"] == str(org_a.organization_id)
     assert len(data["permissions"]) == 41
 
-    # ── Test 2: Teacher gets exactly 29 permissions ──
+    # ── Test 2: Teacher gets exactly 30 permissions ──
     res = await client.get("/api/v1/roles/me/permissions", headers=headers_teacher)
     assert res.status_code == 200
     teacher_perms = res.json()["permissions"]
-    assert len(teacher_perms) == 29
+    assert len(teacher_perms) == 30
+    assert "member.read" in teacher_perms
     assert "workspace.read" in teacher_perms
     assert "subject.create" in teacher_perms
     assert "subject.material.create" in teacher_perms
@@ -291,10 +292,10 @@ async def test_me_permissions_endpoint(client: AsyncClient, db_session):
     ))
     await db_session.commit()
 
-    # Multi user in Org A (Teacher) → 29 permissions
+    # Multi user in Org A (Teacher) → 30 permissions
     res_a = await client.get("/api/v1/roles/me/permissions", headers=headers_multi)
     assert res_a.status_code == 200
-    assert len(res_a.json()["permissions"]) == 29
+    assert len(res_a.json()["permissions"]) == 30
 
     # Multi user in Org B (Student) → 8 permissions
     headers_multi_b = {**headers_multi, "X-Organization-Id": str(org_b.organization_id)}

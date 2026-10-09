@@ -14,10 +14,13 @@ from app.modules.subjects.models import (
     Subject,
     SubjectStatus,
     SubjectMaterial,
-    SubjectMaterialStatus
+    SubjectMaterialStatus,
+    MaterialIndexStatus,
 )
 from app.modules.organizations.models import Workspace, WorkspaceStatus
 from app.modules.subjects.material_repository import SubjectMaterialRepository
+from app.modules.rag.constants import RAG_SUPPORTED_MIME_TYPES, RAG_UNSUPPORTED_MIME_TYPES
+from app.modules.rag.service import RagService
 from app.modules.subjects.material_schemas import (
     MaterialUploadUrlRequest,
     MaterialUploadUrlResponse,
@@ -227,8 +230,17 @@ class SubjectMaterialService:
         # Ensure s3_key is set and active
         material.material_s3_key = payload.s3_key
         material.material_status = SubjectMaterialStatus.ACTIVE
-        await self.db.flush()
 
+        # Mark initial index status for background processing
+        clean_mime = (material.material_content_type or "").strip().lower()
+        if clean_mime in RAG_SUPPORTED_MIME_TYPES:
+            material.material_index_status = MaterialIndexStatus.PROCESSING
+            material.material_index_error = None
+        else:
+            material.material_index_status = MaterialIndexStatus.UNSUPPORTED
+            material.material_index_error = f"File format ({material.material_content_type}) is not supported for text extraction."
+
+        await self.db.flush()
         return self._format_material_response(material)
 
     async def list_materials(
@@ -352,6 +364,18 @@ class SubjectMaterialService:
         )
 
         await self.repo.archive_material(material)
+
+        # Remove material vectors from vector store
+        try:
+            rag_service = RagService(self.db, storage=self.storage)
+            await rag_service.delete_material_vectors(
+                org_id=org_id,
+                subject_id=subject.subject_id,
+                material_id=material.material_id,
+            )
+        except Exception:
+            pass
+
         return {"message": "Material archived successfully"}
 
     async def get_download_url(
@@ -404,6 +428,12 @@ class SubjectMaterialService:
                 last_name=material.uploader.user_last_name
             )
 
+        index_status_str = (
+            material.material_index_status.value
+            if hasattr(material.material_index_status, "value")
+            else str(material.material_index_status or "pending")
+        )
+
         return MaterialResponse(
             material_id=material.material_id,
             subject_id=material.material_subject_id,
@@ -414,8 +444,13 @@ class SubjectMaterialService:
             content_type=material.material_content_type,
             file_size=material.material_file_size,
             status=material.material_status.value if hasattr(material.material_status, "value") else str(material.material_status),
+            index_status=index_status_str,
+            indexed_at=material.material_indexed_at,
+            index_error=material.material_index_error,
+            chunk_count=material.material_chunk_count or 0,
             s3_key=material.material_s3_key,
             uploaded_by=uploader_summary,
             created_at=material.material_created_at,
             updated_at=material.material_updated_at
         )
+

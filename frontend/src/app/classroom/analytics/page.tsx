@@ -99,22 +99,33 @@ export default function LearningAnalyticsPage() {
   // Load subject list and members for teachers
   const loadTeacherData = async () => {
     try {
-      const [subjectsData, membersData] = await Promise.all([
+      const [subjectsResult, membersResult] = await Promise.allSettled([
         fetchSubjects(),
         fetchMembers({}),
       ]);
-      setSubjects(subjectsData);
-      if (subjectsData.length > 0 && !selectedSubjectId) {
-        setSelectedSubjectId(subjectsData[0].subject_id);
+
+      if (subjectsResult.status === "fulfilled") {
+        const subjectsData = subjectsResult.value;
+        setSubjects(subjectsData);
+        if (subjectsData.length > 0 && !selectedSubjectId) {
+          setSelectedSubjectId(subjectsData[0].subject_id);
+        }
+      } else {
+        console.error("Failed to load subjects:", subjectsResult.reason);
       }
 
-      // Filter members strictly to students
-      const studentMembers = membersData.filter(m => m.role_name?.toLowerCase() === "student");
-      setMembers(studentMembers);
-      if (studentMembers.length > 0) {
-        setSelectedStudentId(studentMembers[0].user_id);
+      if (membersResult.status === "fulfilled") {
+        const membersData = membersResult.value;
+        // Filter members strictly to students
+        const studentMembers = membersData.filter(m => m.role_name?.toLowerCase() === "student");
+        setMembers(studentMembers);
+        if (studentMembers.length > 0) {
+          setSelectedStudentId((prev) => prev || studentMembers[0].user_id);
+        } else {
+          setSelectedStudentId("");
+        }
       } else {
-        setSelectedStudentId("");
+        console.error("Failed to load members:", membersResult.reason);
       }
     } catch (err: any) {
       console.error("Failed to load teacher metadata:", err);

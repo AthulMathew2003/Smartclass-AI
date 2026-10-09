@@ -229,6 +229,21 @@ export default function SubjectDetailsPage() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() =>
+                router.push(
+                  workspaceIdFromQuery
+                    ? `/classroom/subjects/${id}/ai-tutor?workspace_id=${workspaceIdFromQuery}`
+                    : `/classroom/subjects/${id}/ai-tutor`
+                )
+              }
+              className="bg-primary text-white font-bold gap-1.5 shadow-xs"
+            >
+              <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+              AI Tutor
+            </Button>
             {hasPermission("subject.material.read") && (
               <Button
                 variant="outline"

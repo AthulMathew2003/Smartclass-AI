@@ -54,6 +54,27 @@ class Settings(BaseSettings):
     MATERIAL_MAX_VIDEO_SIZE_MB: int = 500
     MATERIAL_MAX_ZIP_SIZE_MB: int = 100
 
+    # Google Gemini & RAG Settings
+    GEMINI_API_KEY: str = ""
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    GEMINI_GENERATION_MODEL: str = "gemini-3.6-flash"
+
+    # ChromaDB Settings
+    CHROMA_PERSIST_DIRECTORY: str = "./chroma_data"
+    CHROMA_COLLECTION_NAME: str = "smartclass_materials"
+
+    # RAG Chunking & Search Settings
+    RAG_CHUNK_SIZE: int = 1000
+    RAG_CHUNK_OVERLAP: int = 200
+    RAG_DEFAULT_SEARCH_TOP_K: int = 5
+    RAG_MAX_SEARCH_TOP_K: int = 20
+
+    # AI Tutor Settings
+    AI_TUTOR_MAX_HISTORY_MESSAGES: int = 10
+    AI_TUTOR_MAX_CONTEXT_CHUNKS: int = 5
+    AI_TUTOR_TEMPERATURE: float = 0.3
+    AI_TUTOR_MAX_OUTPUT_TOKENS: int = 2048
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

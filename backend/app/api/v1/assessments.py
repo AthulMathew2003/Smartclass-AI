@@ -1,6 +1,6 @@
 import uuid
 from typing import List, Optional, Union, Dict, Any
-from fastapi import APIRouter, Depends, status, Query, Body
+from fastapi import APIRouter, Depends, status, Query, Body, UploadFile, File, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -11,6 +11,7 @@ from app.modules.rbac.dependencies import get_current_organization, require_perm
 from app.modules.rbac.constants import AssessmentPermission, QuestionPermission
 from app.modules.assessments.models import AssessmentStatus
 from app.modules.assessments.service import AssessmentService
+from app.modules.assessments.excel_service import BulkQuestionImportService
 from app.modules.assessments.schemas import (
     AssessmentCreateRequest,
     AssessmentUpdateRequest,
@@ -33,7 +34,9 @@ from app.modules.assessments.schemas import (
     SubjectQuestionDifficultyResponse,
     SubjectLearningAnalyticsResponse,
     AssessmentLeaderboardResponse,
-    AssessmentLeaderboardSettingsUpdateRequest
+    AssessmentLeaderboardSettingsUpdateRequest,
+    BulkUploadValidateResponse,
+    BulkUploadImportResponse
 )
 
 router = APIRouter()
@@ -392,6 +395,82 @@ async def add_question_from_bank(
     )
     await db.commit()
     return res
+
+
+# ── Bulk Question Upload Endpoints ──────────────────────────────
+
+@router.get("/bulk-upload/template")
+@router.get("/{assessment_id}/questions/bulk-upload/template")
+async def download_excel_question_template(
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    _=Depends(require_permission(QuestionPermission.CREATE))
+):
+    """Download the standardized Excel (.xlsx) question upload template with sample rows and instructions."""
+    template_bytes = BulkQuestionImportService.generate_excel_template()
+    return Response(
+        content=template_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="smartclass_questions_template.xlsx"',
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
+
+
+@router.post("/{assessment_id}/questions/bulk-upload/validate", response_model=BulkUploadValidateResponse)
+async def validate_bulk_question_upload(
+    assessment_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(QuestionPermission.CREATE))
+):
+    """
+    Validate an Excel (.xlsx) file containing multiple questions for an assessment.
+    Performs full syntax, marks, option consistency, and duplicate validation without saving.
+    """
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    file_bytes = await file.read()
+    return await service.validate_bulk_questions(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        file_bytes=file_bytes
+    )
+
+
+@router.post("/{assessment_id}/questions/bulk-upload", response_model=BulkUploadImportResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{assessment_id}/questions/bulk-upload/import", response_model=BulkUploadImportResponse, status_code=status.HTTP_201_CREATED)
+async def import_bulk_question_upload(
+    assessment_id: uuid.UUID,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(QuestionPermission.CREATE))
+):
+    """
+    Atomically validate and import questions from an Excel (.xlsx) file.
+    Creates Question Bank entries and attaches immutable Assessment Question snapshots to the assessment.
+    Recalculates assessment total marks automatically.
+    """
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    file_bytes = await file.read()
+    res = await service.import_bulk_questions(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        requesting_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        file_bytes=file_bytes
+    )
+    await db.commit()
+    return res
+
 
 
 @router.post("/{assessment_id}/questions/reorder")

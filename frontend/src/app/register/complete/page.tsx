@@ -71,8 +71,8 @@ export default function CompleteRegistrationPage() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = getMemoryAccessToken();
       const user = await fetchCurrentUser();
+      const token = getMemoryAccessToken();
       if (!token || !user) { router.replace("/login"); return; }
       if (user.first_name) setFirstName(user.first_name);
       if (user.last_name) setLastName(user.last_name);

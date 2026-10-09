@@ -1,4 +1,5 @@
-import { apiFetch } from "./api";
+import { apiFetch, getAuthenticatedToken } from "./api";
+import { API_BASE_URL } from "./auth";
 
 export type AssessmentType = "quiz" | "exam" | "practice";
 export type AssessmentStatus = "draft" | "published" | "active" | "closed" | "archived";
@@ -1016,6 +1017,120 @@ export const createQuestion = createAndAddQuestionToAssessment;
 export const updateQuestion = updateAssessmentQuestion;
 export const deleteQuestion = removeAssessmentQuestion;
 export const reorderQuestions = reorderAssessmentQuestions;
+
+
+// ── Bulk Question Upload Types & Functions ──────────────────────
+
+export interface BulkUploadValidationErrorItem {
+  row: number;
+  field?: string | null;
+  message: string;
+}
+
+export interface BulkUploadPreviewItem {
+  row: number;
+  question_text: string;
+  question_type: QuestionType;
+  marks: number | string;
+  options_count: number;
+  correct_answer?: string | null;
+  explanation?: string | null;
+  order?: number | null;
+  status: string;
+}
+
+export interface BulkUploadValidateResponse {
+  valid: boolean;
+  total_rows: number;
+  valid_rows: number;
+  error_count: number;
+  total_marks: number | string;
+  errors: BulkUploadValidationErrorItem[];
+  preview: BulkUploadPreviewItem[];
+}
+
+export interface BulkUploadImportResponse {
+  success: boolean;
+  imported_count: number;
+  total_marks_added: number | string;
+  assessment_total_marks: number | string;
+  questions: AssessmentQuestion[];
+}
+
+export async function downloadExcelQuestionTemplate(assessmentId?: string): Promise<void> {
+  const token = await getAuthenticatedToken();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+  if (typeof window !== "undefined") {
+    const activeOrgId = localStorage.getItem("activeOrganizationId");
+    if (activeOrgId) {
+      headers["X-Organization-Id"] = activeOrgId;
+    }
+  }
+
+  const endpoint = assessmentId
+    ? `/assessments/${encodeURIComponent(assessmentId)}/questions/bulk-upload/template`
+    : `/assessments/bulk-upload/template`;
+
+  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: "GET",
+    headers,
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    let errMsg = "Failed to download Excel template.";
+    try {
+      const err = await res.json();
+      errMsg = err.detail || err.message || errMsg;
+    } catch {}
+    throw new Error(errMsg);
+  }
+
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "smartclass_questions_template.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function validateBulkQuestions(
+  assessmentId: string,
+  file: File
+): Promise<BulkUploadValidateResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return await apiFetch<BulkUploadValidateResponse>(
+    `/assessments/${encodeURIComponent(assessmentId)}/questions/bulk-upload/validate`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+}
+
+export async function importBulkQuestions(
+  assessmentId: string,
+  file: File
+): Promise<BulkUploadImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return await apiFetch<BulkUploadImportResponse>(
+    `/assessments/${encodeURIComponent(assessmentId)}/questions/bulk-upload/import`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+}
+
 
 
 

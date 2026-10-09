@@ -7,6 +7,8 @@ export interface MaterialUploader {
   last_name?: string | null;
 }
 
+export type MaterialIndexStatus = "pending" | "processing" | "indexed" | "failed" | "unsupported";
+
 export interface SubjectMaterial {
   material_id: string;
   subject_id: string;
@@ -21,6 +23,10 @@ export interface SubjectMaterial {
   uploaded_by?: MaterialUploader | null;
   created_at: string;
   updated_at: string;
+  index_status?: MaterialIndexStatus | null;
+  indexed_at?: string | null;
+  index_error?: string | null;
+  chunk_count?: number | null;
 }
 
 export interface MaterialUploadUrlPayload {
@@ -158,6 +164,39 @@ export async function getMaterialDownloadUrl(
 ): Promise<MaterialDownloadUrlResponse> {
   return await apiFetch<MaterialDownloadUrlResponse>(
     `/subjects/${encodeURIComponent(subjectId)}/materials/${encodeURIComponent(materialId)}/download-url`
+  );
+}
+
+export async function reindexSubjectMaterial(
+  subjectId: string,
+  materialId: string
+): Promise<{ status: string; chunk_count: number; message: string }> {
+  return await apiFetch<{ status: string; chunk_count: number; message: string }>(
+    `/rag/subjects/${encodeURIComponent(subjectId)}/materials/${encodeURIComponent(materialId)}/reindex`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function fetchMaterialIndexStatus(
+  subjectId: string,
+  materialId: string
+): Promise<{
+  material_id: string;
+  status: MaterialIndexStatus;
+  indexed_at?: string | null;
+  chunk_count: number;
+  error?: string | null;
+}> {
+  return await apiFetch<{
+    material_id: string;
+    status: MaterialIndexStatus;
+    indexed_at?: string | null;
+    chunk_count: number;
+    error?: string | null;
+  }>(
+    `/rag/subjects/${encodeURIComponent(subjectId)}/materials/${encodeURIComponent(materialId)}/index-status`
   );
 }
 

@@ -23,4 +23,5 @@ from app.modules.assessments.models import (  # noqa: F401
     AssessmentQuestion,
     QuestionOption
 )
+from app.modules.ai_tutor.models import AiTutorConversation, AiTutorMessage  # noqa: F401
 

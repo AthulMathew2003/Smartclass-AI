@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchOnboardingStatus, fetchUserMemberships, UserMembershipBrief } from "../../lib/auth";
+import { fetchCurrentUser, fetchOnboardingStatus, fetchUserMemberships, UserMembershipBrief } from "../../lib/auth";
 import { clearPermissions, loadPermissions } from "../../lib/permissions";
 
 export default function SelectOrganizationPage() {
@@ -14,6 +14,7 @@ export default function SelectOrganizationPage() {
     const init = async () => {
       if (typeof window !== "undefined") localStorage.removeItem("activeOrganizationId");
       clearPermissions();
+      await fetchCurrentUser();
       const st = await fetchOnboardingStatus();
       const mems = await fetchUserMemberships();
       const hasMemberships = mems && mems.length > 0;

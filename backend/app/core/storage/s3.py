@@ -195,3 +195,35 @@ class S3StorageService:
             if isinstance(e, (ValidationException, StorageException)):
                 raise
             raise StorageException(f"Unexpected error checking object existence: {str(e)}")
+
+    def get_object_bytes(self, key: str) -> bytes:
+        """
+        Fetch private S3 object contents as raw bytes.
+        
+        :param key: S3 key/path to retrieve.
+        :return: Object data as bytes.
+        """
+        validated_key = validate_storage_key(key)
+
+        if not self.bucket_name:
+            raise StorageException("S3 bucket name is not configured.")
+
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=validated_key,
+            )
+            return response["Body"].read()
+        except ClientError as e:
+            error_code = str(e.response.get("Error", {}).get("Code", ""))
+            status_code = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if error_code in ("404", "NoSuchKey", "NotFound") or status_code == 404:
+                raise StorageException(f"Object '{key}' not found in S3 storage.")
+            raise StorageException(
+                f"Failed to read object from S3: {e.response.get('Error', {}).get('Message', str(e))}"
+            )
+        except Exception as e:
+            if isinstance(e, (ValidationException, StorageException)):
+                raise
+            raise StorageException(f"Unexpected error reading object from S3: {str(e)}")
+

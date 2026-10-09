@@ -27,6 +27,10 @@ out/
 # Node Modules
 node_modules/
 
+# ChromaDB Data
+chroma_data/
+backend/chroma_data/
+
 # OS Files
 .DS_Store
 Thumbs.db

@@ -5,12 +5,14 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   SubjectMaterial,
+  MaterialIndexStatus,
   fetchSubjectMaterials,
   requestMaterialUploadUrl,
   confirmMaterialUpload,
   updateSubjectMaterial,
   archiveSubjectMaterial,
   getMaterialDownloadUrl,
+  reindexSubjectMaterial,
   uploadFileToS3,
   formatFileSize,
   getMaterialIcon,
@@ -88,10 +90,76 @@ export default function SubjectMaterialsPage() {
   const [materialToArchive, setMaterialToArchive] = useState<SubjectMaterial | null>(null);
   const [archiving, setArchiving] = useState(false);
 
+  // Re-indexing State
+  const [reindexingMap, setReindexingMap] = useState<{ [id: string]: boolean }>({});
+
   const canCreate = hasPermission("subject.material.create");
   const canUpdate = hasPermission("subject.material.update");
   const canDelete = hasPermission("subject.material.delete");
   const isTeacherOrAdmin = canCreate || canUpdate || canDelete;
+
+  const handleReindex = async (mat: SubjectMaterial) => {
+    setReindexingMap((prev) => ({ ...prev, [mat.material_id]: true }));
+    try {
+      await reindexSubjectMaterial(id, mat.material_id);
+      await loadData();
+    } catch (err: any) {
+      alert(err?.message || "Failed to re-index material.");
+    } finally {
+      setReindexingMap((prev) => ({ ...prev, [mat.material_id]: false }));
+    }
+  };
+
+  const renderIndexBadge = (mat: SubjectMaterial) => {
+    const status = mat.index_status || "pending";
+    const isReindexing = !!reindexingMap[mat.material_id];
+
+    if (isReindexing || status === "processing") {
+      return (
+        <Badge variant="outline" className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 border-blue-500/20 gap-1 shrink-0">
+          <div className="w-2 h-2 border border-t-transparent border-blue-600 rounded-full animate-spin" />
+          Indexing...
+        </Badge>
+      );
+    }
+
+    if (status === "indexed") {
+      return (
+        <Badge variant="outline" className="text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1 shrink-0">
+          <span className="material-symbols-outlined text-[12px]">auto_awesome</span>
+          AI Indexed {mat.chunk_count ? `(${mat.chunk_count})` : ""}
+        </Badge>
+      );
+    }
+
+    if (status === "failed") {
+      return (
+        <Badge
+          variant="outline"
+          className="text-[10px] font-semibold bg-destructive/10 text-destructive border-destructive/20 gap-1 shrink-0 cursor-help"
+          title={mat.index_error || "Indexing failed. Click Re-index to try again."}
+        >
+          <span className="material-symbols-outlined text-[12px]">error</span>
+          Index Failed
+        </Badge>
+      );
+    }
+
+    if (status === "unsupported") {
+      return (
+        <Badge variant="outline" className="text-[10px] font-medium text-muted-foreground bg-muted/40 border-border/40 gap-1 shrink-0">
+          Non-Indexable
+        </Badge>
+      );
+    }
+
+    return (
+      <Badge variant="outline" className="text-[10px] font-medium bg-amber-500/10 text-amber-600 border-amber-500/20 gap-1 shrink-0">
+        <span className="material-symbols-outlined text-[12px]">schedule</span>
+        Index Pending
+      </Badge>
+    );
+  };
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -130,6 +198,20 @@ export default function SubjectMaterialsPage() {
       loadData();
     }
   }, [permLoaded, loadData, hasPermission]);
+
+  // Auto-refresh while any material is currently indexing
+  useEffect(() => {
+    const isAnyIndexing = materials.some(
+      (m) => m.index_status === "processing" || m.index_status === "pending" || !!reindexingMap[m.material_id]
+    );
+    if (!isAnyIndexing) return;
+
+    const timer = setInterval(() => {
+      loadData();
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [materials, reindexingMap, loadData]);
 
   // Direct file download trigger helper
   const handleDownload = async (mat: SubjectMaterial) => {
@@ -452,9 +534,12 @@ export default function SubjectMaterialsPage() {
                       </div>
                     </div>
 
-                    <Badge variant="outline" className="text-[10px] font-bold uppercase shrink-0">
-                      {mat.category}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <Badge variant="outline" className="text-[10px] font-bold uppercase shrink-0">
+                        {mat.category}
+                      </Badge>
+                      {renderIndexBadge(mat)}
+                    </div>
                   </div>
 
                   {mat.description && (
@@ -502,6 +587,20 @@ export default function SubjectMaterialsPage() {
 
                     {isTeacherOrAdmin && !isSubjectArchived && (
                       <>
+                        {mat.index_status !== "unsupported" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleReindex(mat)}
+                            disabled={!!reindexingMap[mat.material_id] || mat.index_status === "processing"}
+                            title="Re-index into AI Knowledge Base"
+                            className="h-8 w-8 p-0 text-primary hover:text-primary hover:bg-primary/10 cursor-pointer"
+                          >
+                            <span className={`material-symbols-outlined text-[16px] ${reindexingMap[mat.material_id] || mat.index_status === "processing" ? "animate-spin" : ""}`}>
+                              refresh
+                            </span>
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="ghost"

@@ -17,6 +17,15 @@ class SubjectMaterialStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class MaterialIndexStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    INDEXED = "indexed"
+    FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+
+
+
 class Subject(Base):
     __tablename__ = "tbl_subjects"
     __table_args__ = (
@@ -159,6 +168,29 @@ class SubjectMaterial(Base):
         default=SubjectMaterialStatus.ACTIVE,
         nullable=False,
         index=True
+    )
+    material_index_status: Mapped[MaterialIndexStatus] = mapped_column(
+        SQLEnum(MaterialIndexStatus, name="material_index_status_enum", values_callable=lambda obj: [e.value for e in obj]),
+        default=MaterialIndexStatus.PENDING,
+        nullable=False,
+        index=True
+    )
+    material_indexed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    material_index_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+    material_content_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True
+    )
+    material_chunk_count: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        nullable=False
     )
     material_uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

@@ -73,8 +73,13 @@ from app.modules.assessments.schemas import (
     AssessmentLeaderboardEntryResponse,
     AssessmentLeaderboardResponse,
     ClassStudentPerformanceItem,
-    ClassPerformanceDashboardResponse
+    ClassPerformanceDashboardResponse,
+    BulkUploadValidationErrorItem,
+    BulkUploadPreviewItem,
+    BulkUploadValidateResponse,
+    BulkUploadImportResponse
 )
+from app.modules.assessments.excel_service import BulkQuestionImportService
 from app.modules.assessments.repository import AssessmentRepository
 from app.modules.subjects.models import Subject, SubjectTeacher, SubjectStatus
 from app.modules.organizations.models import Workspace, WorkspaceStatus
@@ -949,6 +954,167 @@ class AssessmentService:
         await self.repo.recalculate_assessment_total_marks(assessment_id)
         data = self._unpack_assessment_question(aq, sanitize_for_student=False)
         return AssessmentQuestionResponse.model_validate(data)
+
+    async def validate_bulk_questions(
+        self,
+        org_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool,
+        file_bytes: bytes
+    ) -> BulkUploadValidateResponse:
+        """Validate an Excel question spreadsheet without saving any records."""
+        assessment, subject, workspace = await self._verify_assessment_hierarchy(assessment_id, org_id)
+
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        if assessment.assessment_status != AssessmentStatus.DRAFT:
+            raise ConflictException(f"Questions can only be added to DRAFT assessments (current: {assessment.assessment_status.value}).")
+
+        existing_questions = await self.repo.list_assessment_questions(assessment_id)
+        existing_texts = {
+            q.assessment_question_snapshot.get("question_text", "").strip().lower()
+            for q in existing_questions
+            if q.assessment_question_snapshot and isinstance(q.assessment_question_snapshot, dict)
+        }
+
+        parsed_questions, errors, total_marks = BulkQuestionImportService.parse_and_validate_workbook(
+            file_bytes=file_bytes,
+            existing_assessment_question_texts=existing_texts
+        )
+
+        preview = [
+            BulkUploadPreviewItem(
+                row=q["row"],
+                question_text=q["question_text"],
+                question_type=q["question_type"],
+                marks=q["marks"],
+                options_count=len(q["options"]),
+                correct_answer=q.get("correct_answer"),
+                explanation=q.get("explanation"),
+                order=q.get("order"),
+                status="valid"
+            )
+            for q in parsed_questions
+        ]
+
+        error_rows = {e.row for e in errors if e.field != "file"}
+        total_rows_detected = len(parsed_questions) + len(error_rows)
+
+        return BulkUploadValidateResponse(
+            valid=(len(errors) == 0 and len(parsed_questions) > 0),
+            total_rows=total_rows_detected,
+            valid_rows=len(parsed_questions),
+            error_count=len(errors),
+            total_marks=total_marks,
+            errors=errors,
+            preview=preview
+        )
+
+    async def import_bulk_questions(
+        self,
+        org_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        requesting_user_id: uuid.UUID,
+        is_org_admin: bool,
+        file_bytes: bytes
+    ) -> BulkUploadImportResponse:
+        """Atomically validate and import questions from Excel spreadsheet into Question Bank & Assessment."""
+        assessment, subject, workspace = await self._verify_assessment_hierarchy(assessment_id, org_id)
+
+        await self._verify_teacher_or_admin(
+            requesting_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        if assessment.assessment_status != AssessmentStatus.DRAFT:
+            raise ConflictException(f"Questions can only be added to DRAFT assessments (current: {assessment.assessment_status.value}).")
+
+        existing_questions = await self.repo.list_assessment_questions(assessment_id)
+        existing_texts = {
+            q.assessment_question_snapshot.get("question_text", "").strip().lower()
+            for q in existing_questions
+            if q.assessment_question_snapshot and isinstance(q.assessment_question_snapshot, dict)
+        }
+
+        parsed_questions, errors, total_marks = BulkQuestionImportService.parse_and_validate_workbook(
+            file_bytes=file_bytes,
+            existing_assessment_question_texts=existing_texts
+        )
+
+        if errors or len(parsed_questions) == 0:
+            if len(parsed_questions) == 0 and not errors:
+                raise ValidationException("The spreadsheet contains no question rows to import.")
+            err_summary = "; ".join([f"Row {e.row}: {e.message}" for e in errors[:5]])
+            if len(errors) > 5:
+                err_summary += f" (and {len(errors) - 5} more errors)"
+            raise ValidationException(f"Cannot import spreadsheet with validation errors: {err_summary}")
+
+        max_order = await self.repo.get_max_assessment_question_order(assessment_id)
+        created_aqs = []
+
+        for idx, q_data in enumerate(parsed_questions):
+            order = q_data["order"] if q_data["order"] is not None else (max_order + idx + 1)
+            options_data = [
+                {
+                    "option_text": opt.option_text,
+                    "option_order": opt.option_order,
+                    "option_is_correct": opt.option_is_correct
+                }
+                for opt in q_data["options"]
+            ]
+
+            bank_item = await self.repo.create_question_bank_item(
+                subject_id=subject.subject_id,
+                question_type=q_data["question_type"],
+                question_text=q_data["question_text"],
+                default_marks=q_data["marks"],
+                question_explanation=q_data.get("explanation"),
+                created_by=requesting_user_id,
+                options_data=options_data
+            )
+
+            snapshot = self._build_question_snapshot(
+                question_id=bank_item.question_id,
+                question_type=bank_item.question_type,
+                question_text=bank_item.question_text,
+                marks=q_data["marks"],
+                question_explanation=bank_item.question_explanation,
+                options=bank_item.options
+            )
+
+            aq = await self.repo.create_assessment_question(
+                assessment_id=assessment_id,
+                question_id=bank_item.question_id,
+                order=order,
+                marks=q_data["marks"],
+                snapshot=snapshot
+            )
+            created_aqs.append(aq)
+
+        updated_total_marks = await self.repo.recalculate_assessment_total_marks(assessment_id)
+        resp_questions = [
+            AssessmentQuestionResponse.model_validate(self._unpack_assessment_question(aq, sanitize_for_student=False))
+            for aq in created_aqs
+        ]
+
+        return BulkUploadImportResponse(
+            success=True,
+            imported_count=len(created_aqs),
+            total_marks_added=total_marks,
+            assessment_total_marks=updated_total_marks,
+            questions=resp_questions
+        )
+
 
     async def list_assessment_questions(
         self,

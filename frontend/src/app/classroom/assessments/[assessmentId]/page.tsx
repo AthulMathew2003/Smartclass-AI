@@ -35,7 +35,13 @@ import {
   AssessmentLeaderboardResponse,
   AssessmentLeaderboardEntry,
   fetchAssessmentLeaderboard,
-  updateAssessmentLeaderboardSettings
+  updateAssessmentLeaderboardSettings,
+  downloadExcelQuestionTemplate,
+  validateBulkQuestions,
+  importBulkQuestions,
+  BulkUploadValidateResponse,
+  BulkUploadPreviewItem,
+  BulkUploadValidationErrorItem
 } from "@/lib/assessments";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,6 +136,20 @@ export default function AssessmentBuilderPage() {
   const [inlineSaving, setInlineSaving] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
 
+  // Bulk Upload Modal State
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [validatingBulk, setValidatingBulk] = useState(false);
+  const [validationResult, setValidationResult] = useState<BulkUploadValidateResponse | null>(null);
+  const [bulkUploadError, setBulkUploadError] = useState<string | null>(null);
+  const [importingBulk, setImportingBulk] = useState(false);
+  const [importSuccessResult, setImportSuccessResult] = useState<{
+    importedCount: number;
+    marksAdded: number | string;
+    totalMarks: number | string;
+  } | null>(null);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+
   // Settings Tab State
   const [settingsTitle, setSettingsTitle] = useState("");
   const [settingsDescription, setSettingsDescription] = useState("");
@@ -189,12 +209,8 @@ export default function AssessmentBuilderPage() {
     try {
       setLoading(true);
       setError(null);
-      const [asm, qList] = await Promise.all([
-        fetchAssessment(assessmentId),
-        fetchAssessmentQuestions(assessmentId)
-      ]);
+      const asm = await fetchAssessment(assessmentId);
       setAssessment(asm);
-      setQuestions(qList);
 
       // Populate settings form
       setSettingsTitle(asm.assessment_title);
@@ -204,6 +220,14 @@ export default function AssessmentBuilderPage() {
       setSettingsAttemptLimit(asm.assessment_attempt_limit || 1);
       setSettingsRandomize(asm.assessment_randomize_questions || false);
       setSettingsLeaderboardEnabled(asm.assessment_leaderboard_enabled || false);
+
+      // Fetch questions
+      try {
+        const qList = await fetchAssessmentQuestions(assessmentId);
+        setQuestions(qList);
+      } catch (err: any) {
+        console.error("Failed to load questions list:", err);
+      }
 
       // Load Leaderboard data
       loadLeaderboardData(1);
@@ -474,6 +498,76 @@ export default function AssessmentBuilderPage() {
 
   function updateInlineQuestion(id: string, updates: Partial<InlineQuestionState>) {
     setInlineQuestions((prev) => prev.map((q) => q.id === id ? { ...q, ...updates } : q));
+  }
+
+  // ── Bulk Upload Handlers ─────────────────────────────────────
+
+  async function handleDownloadTemplate() {
+    try {
+      setDownloadingTemplate(true);
+      await downloadExcelQuestionTemplate(assessmentId);
+    } catch (err: any) {
+      alert(err.message || "Failed to download template.");
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+      setBulkUploadError("Only Excel (.xlsx) files are supported.");
+      setSelectedFile(null);
+      setValidationResult(null);
+      return;
+    }
+    setSelectedFile(file);
+    setValidationResult(null);
+    setBulkUploadError(null);
+    setImportSuccessResult(null);
+  }
+
+  async function handleValidateFile() {
+    if (!selectedFile) return;
+    try {
+      setValidatingBulk(true);
+      setBulkUploadError(null);
+      const res = await validateBulkQuestions(assessmentId, selectedFile);
+      setValidationResult(res);
+    } catch (err: any) {
+      setBulkUploadError(err.message || "Failed to validate Excel file.");
+      setValidationResult(null);
+    } finally {
+      setValidatingBulk(false);
+    }
+  }
+
+  async function handleImportValidatedFile() {
+    if (!selectedFile || !validationResult?.valid) return;
+    try {
+      setImportingBulk(true);
+      setBulkUploadError(null);
+      const res = await importBulkQuestions(assessmentId, selectedFile);
+      setImportSuccessResult({
+        importedCount: res.imported_count,
+        marksAdded: res.total_marks_added,
+        totalMarks: res.assessment_total_marks,
+      });
+      await loadAssessmentData();
+    } catch (err: any) {
+      setBulkUploadError(err.message || "Failed to import questions.");
+    } finally {
+      setImportingBulk(false);
+    }
+  }
+
+  function handleCloseBulkUpload() {
+    setIsBulkUploadOpen(false);
+    setSelectedFile(null);
+    setValidationResult(null);
+    setBulkUploadError(null);
+    setImportSuccessResult(null);
   }
 
   // ── Reorder Questions ────────────────────────────────────────
@@ -1205,7 +1299,7 @@ export default function AssessmentBuilderPage() {
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                 <Button
                   onClick={() => setIsPickerOpen(true)}
                   className="flex items-center gap-1.5 text-xs font-semibold shadow-sm"
@@ -1213,6 +1307,20 @@ export default function AssessmentBuilderPage() {
                 >
                   <span className="material-symbols-outlined text-[16px]">menu_book</span>
                   Pick from Question Bank
+                </Button>
+                <Button
+                  onClick={() => {
+                    setIsBulkUploadOpen(true);
+                    setSelectedFile(null);
+                    setValidationResult(null);
+                    setBulkUploadError(null);
+                    setImportSuccessResult(null);
+                  }}
+                  variant="outline"
+                  className="flex items-center gap-1.5 text-xs font-semibold hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                >
+                  <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                  Bulk Upload
                 </Button>
                 <Button
                   onClick={handleOpenInlineCreate}
@@ -1244,7 +1352,7 @@ export default function AssessmentBuilderPage() {
                 Add questions from your Subject Question Bank or craft new ones to publish this assessment.
               </p>
               {isDraft && (
-                <div className="mt-4 flex justify-center gap-3">
+                <div className="mt-4 flex flex-wrap justify-center gap-3">
                   <Button
                     onClick={() => setIsPickerOpen(true)}
                     className="flex items-center gap-2 shadow-sm font-medium"
@@ -1252,6 +1360,20 @@ export default function AssessmentBuilderPage() {
                   >
                     <span className="material-symbols-outlined text-[18px]">menu_book</span>
                     Browse Question Bank
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setIsBulkUploadOpen(true);
+                      setSelectedFile(null);
+                      setValidationResult(null);
+                      setBulkUploadError(null);
+                      setImportSuccessResult(null);
+                    }}
+                    variant="outline"
+                    className="flex items-center gap-2 font-medium"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                    Bulk Upload Excel
                   </Button>
                 </div>
               )}
@@ -2852,6 +2974,307 @@ export default function AssessmentBuilderPage() {
               </div>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── BULK QUESTION UPLOAD MODAL ──────────────────────────── */}
+      <Dialog open={isBulkUploadOpen} onOpenChange={(open) => { if (!open) handleCloseBulkUpload(); else setIsBulkUploadOpen(true); }}>
+        <DialogContent className="max-w-3xl rounded-3xl bg-white dark:bg-[#1b211e] border-[var(--outline-variant)] p-6 shadow-2xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <div className="flex items-center justify-between gap-4 flex-wrap pb-2 border-b border-[var(--outline-variant)]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center flex-shrink-0">
+                  <span className="material-symbols-outlined text-[24px]">upload_file</span>
+                </div>
+                <div>
+                  <DialogTitle className="text-base font-bold text-[var(--on-surface)]">
+                    Bulk Upload Questions
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-[var(--on-surface-variant)]">
+                    Upload an Excel (.xlsx) file to create and attach questions with immutable snapshots.
+                  </DialogDescription>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadTemplate}
+                disabled={downloadingTemplate}
+                className="flex items-center gap-1.5 text-xs font-semibold border-dashed"
+              >
+                {downloadingTemplate ? (
+                  <div className="w-3.5 h-3.5 border-2 border-t-transparent border-[var(--primary)] rounded-full animate-spin mr-1" />
+                ) : (
+                  <span className="material-symbols-outlined text-[16px] text-emerald-600">download</span>
+                )}
+                Download Excel Template
+              </Button>
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-4 py-3 custom-scrollbar">
+            {/* Success State View */}
+            {importSuccessResult ? (
+              <div className="text-center py-8 px-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 space-y-4">
+                <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-sm">
+                  <span className="material-symbols-outlined text-[36px]">check_circle</span>
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-[var(--on-surface)]">
+                    {importSuccessResult.importedCount} Questions Imported Successfully!
+                  </h3>
+                  <p className="text-xs text-[var(--on-surface-variant)]">
+                    All questions have been saved to your Subject Question Bank and added to this assessment with frozen snapshots.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 max-w-md mx-auto pt-2">
+                  <div className="bg-white dark:bg-[#151a17] p-3 rounded-xl border border-[var(--outline-variant)]">
+                    <div className="text-[11px] text-[var(--on-surface-variant)] font-medium">Questions Added</div>
+                    <div className="text-lg font-bold text-emerald-600">{importSuccessResult.importedCount}</div>
+                  </div>
+                  <div className="bg-white dark:bg-[#151a17] p-3 rounded-xl border border-[var(--outline-variant)]">
+                    <div className="text-[11px] text-[var(--on-surface-variant)] font-medium">Marks Added</div>
+                    <div className="text-lg font-bold text-blue-600">{Number(importSuccessResult.marksAdded).toFixed(1)}</div>
+                  </div>
+                  <div className="bg-white dark:bg-[#151a17] p-3 rounded-xl border border-[var(--outline-variant)]">
+                    <div className="text-[11px] text-[var(--on-surface-variant)] font-medium">New Total Marks</div>
+                    <div className="text-lg font-bold text-[var(--on-surface)]">{Number(importSuccessResult.totalMarks).toFixed(1)}</div>
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <Button
+                    onClick={handleCloseBulkUpload}
+                    style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
+                    className="font-semibold px-6 shadow-sm"
+                  >
+                    Done & Return to Builder
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* File Dropzone / Picker */}
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-[var(--on-surface)]">
+                    Choose Spreadsheet (.xlsx)
+                  </Label>
+                  <div className="p-6 rounded-2xl border-2 border-dashed border-[var(--outline-variant)] hover:border-[var(--primary)] bg-[var(--surface-container-lowest)] text-center transition space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-[var(--surface-container-high)] text-[var(--on-surface-variant)] flex items-center justify-center mx-auto">
+                      <span className="material-symbols-outlined text-[28px]">table_chart</span>
+                    </div>
+
+                    {!selectedFile ? (
+                      <div>
+                        <label
+                          htmlFor="bulk-upload-file-input"
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--primary)] text-[var(--on-primary)] hover:opacity-90 cursor-pointer shadow-sm transition"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">file_open</span>
+                          Choose Excel File
+                        </label>
+                        <input
+                          id="bulk-upload-file-input"
+                          type="file"
+                          accept=".xlsx"
+                          onChange={handleFileSelect}
+                          className="hidden"
+                        />
+                        <p className="text-[11px] text-[var(--on-surface-variant)] mt-2">
+                          Accepted format: <span className="font-semibold">.xlsx</span> (Max size: 10 MB, up to 500 questions)
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="inline-flex items-center gap-3 px-3 py-1.5 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20 text-xs font-medium">
+                          <span className="material-symbols-outlined text-[18px]">description</span>
+                          <span className="font-bold">{selectedFile.name}</span>
+                          <span className="text-[11px] opacity-75">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
+                          <button
+                            onClick={() => {
+                              setSelectedFile(null);
+                              setValidationResult(null);
+                              setBulkUploadError(null);
+                            }}
+                            className="hover:text-red-600 transition ml-1"
+                            title="Remove file"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                          </button>
+                        </div>
+
+                        {!validationResult && (
+                          <div>
+                            <Button
+                              onClick={handleValidateFile}
+                              disabled={validatingBulk}
+                              style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
+                              className="font-semibold text-xs shadow-sm flex items-center gap-2 mx-auto"
+                            >
+                              {validatingBulk ? (
+                                <div className="w-3.5 h-3.5 border-2 border-t-transparent border-white rounded-full animate-spin mr-1" />
+                              ) : (
+                                <span className="material-symbols-outlined text-[16px]">fact_check</span>
+                              )}
+                              Validate Spreadsheet
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Error Banner */}
+                {bulkUploadError && (
+                  <div className="p-3 bg-red-500/10 text-red-600 dark:text-red-400 text-xs border border-red-500/20 rounded-xl flex items-start gap-2">
+                    <span className="material-symbols-outlined text-[18px] flex-shrink-0 mt-0.5">error</span>
+                    <span className="flex-1 whitespace-pre-wrap">{bulkUploadError}</span>
+                  </div>
+                )}
+
+                {/* Validation Status & Error List */}
+                {validationResult && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--surface-container-low)] border border-[var(--outline-variant)] text-xs flex-wrap">
+                      <div className="flex items-center gap-2">
+                        {validationResult.valid ? (
+                          <span className="inline-flex items-center gap-1 font-bold text-emerald-600">
+                            <span className="material-symbols-outlined text-[18px]">verified</span>
+                            {validationResult.valid_rows} questions valid (0 errors)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 font-bold text-red-500">
+                            <span className="material-symbols-outlined text-[18px]">warning</span>
+                            {validationResult.total_rows} questions found ({validationResult.error_count} {validationResult.error_count === 1 ? "error" : "errors"} require attention)
+                          </span>
+                        )}
+                      </div>
+
+                      {validationResult.valid && (
+                        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-bold text-xs">
+                          Total Marks from Upload: {Number(validationResult.total_marks).toFixed(1)}
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Show Row-by-Row Errors */}
+                    {!validationResult.valid && validationResult.errors.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-red-500/5 border border-red-500/20 space-y-2 max-h-56 overflow-y-auto custom-scrollbar">
+                        <h4 className="text-xs font-bold text-red-600 dark:text-red-400 flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-[16px]">cancel</span>
+                          Rows needing attention before import:
+                        </h4>
+                        <div className="space-y-1.5">
+                          {validationResult.errors.map((err, idx) => (
+                            <div
+                              key={`${err.row}-${idx}`}
+                              className="text-xs p-2 rounded-lg bg-white dark:bg-[#151a17] border border-red-500/20 text-[var(--on-surface)] flex items-start gap-2"
+                            >
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/15 text-red-600 flex-shrink-0">
+                                Row {err.row}
+                              </span>
+                              {err.field && (
+                                <span className="text-[10px] font-mono text-[var(--on-surface-variant)] uppercase">
+                                  [{err.field}]
+                                </span>
+                              )}
+                              <span className="text-xs">{err.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[11px] text-[var(--on-surface-variant)] italic pt-1">
+                          Note: SmartClass AI requires atomic imports. All errors must be resolved in your Excel file before importing.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Preview Table */}
+                    {validationResult.preview.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-[var(--on-surface)]">
+                            Questions Preview ({validationResult.preview.length})
+                          </h4>
+                        </div>
+                        <div className="overflow-x-auto rounded-2xl border border-[var(--outline-variant)]">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-[var(--surface-container-low)] text-[var(--on-surface-variant)] font-semibold border-b border-[var(--outline-variant)]">
+                              <tr>
+                                <th className="py-2 px-3 w-10">#</th>
+                                <th className="py-2 px-3">Question Prompt</th>
+                                <th className="py-2 px-3 w-28">Type</th>
+                                <th className="py-2 px-3 w-20 text-right">Marks</th>
+                                <th className="py-2 px-3 w-28">Answer</th>
+                                <th className="py-2 px-3 w-16 text-center">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[var(--outline-variant)] bg-[var(--surface-container-lowest)]">
+                              {validationResult.preview.map((item, idx) => (
+                                <tr key={`preview-${item.row}-${idx}`} className="hover:bg-[var(--surface-container-low)]/50">
+                                  <td className="py-2 px-3 font-semibold text-[var(--on-surface-variant)]">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="py-2 px-3 font-medium text-[var(--on-surface)] max-w-xs truncate">
+                                    {item.question_text}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {getQuestionTypeBadge(item.question_type)}
+                                  </td>
+                                  <td className="py-2 px-3 text-right font-bold text-[var(--on-surface)]">
+                                    {Number(item.marks).toFixed(1)}
+                                  </td>
+                                  <td className="py-2 px-3 text-[var(--on-surface-variant)] truncate max-w-[120px]">
+                                    {item.correct_answer || "—"}
+                                  </td>
+                                  <td className="py-2 px-3 text-center">
+                                    <span className="material-symbols-outlined text-[16px] text-emerald-600" title="Valid">
+                                      check_circle
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-[var(--outline-variant)]">
+            <div className="flex items-center justify-between w-full">
+              <span className="text-xs text-[var(--on-surface-variant)]">
+                {selectedFile ? selectedFile.name : "No file selected"}
+              </span>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={handleCloseBulkUpload}>
+                  {importSuccessResult ? "Close" : "Cancel"}
+                </Button>
+                {!importSuccessResult && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!validationResult?.valid || importingBulk || validatingBulk}
+                    onClick={handleImportValidatedFile}
+                    style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
+                    className="shadow-sm font-semibold flex items-center gap-1.5"
+                  >
+                    {importingBulk && (
+                      <div className="w-3.5 h-3.5 border-2 border-t-transparent border-white rounded-full animate-spin mr-1" />
+                    )}
+                    Import {validationResult?.valid_rows ? `${validationResult.valid_rows} Questions` : "Questions"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
