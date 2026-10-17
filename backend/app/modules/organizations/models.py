@@ -42,6 +42,31 @@ class Organization(Base):
         nullable=False,
         index=True
     )
+    organization_type: Mapped[str] = mapped_column(
+        String(100),
+        default="School",
+        nullable=False
+    )
+    organization_country: Mapped[str] = mapped_column(
+        String(100),
+        default="US",
+        nullable=False
+    )
+    organization_state: Mapped[str] = mapped_column(
+        String(100),
+        default="",
+        nullable=False
+    )
+    organization_city: Mapped[str] = mapped_column(
+        String(100),
+        default="",
+        nullable=False
+    )
+    organization_timezone: Mapped[str] = mapped_column(
+        String(100),
+        default="UTC",
+        nullable=False
+    )
     organization_logo: Mapped[str | None] = mapped_column(
         Text,
         nullable=True

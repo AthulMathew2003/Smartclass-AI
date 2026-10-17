@@ -208,6 +208,11 @@ class OrganizationRepository:
         name: str,
         slug: str,
         owner_user_id: uuid.UUID,
+        org_type: str = "School",
+        country: str = "US",
+        state: str = "",
+        city: str = "",
+        timezone: str = "UTC",
         logo: Optional[str] = None,
         description: Optional[str] = None
     ) -> Organization:
@@ -215,6 +220,11 @@ class OrganizationRepository:
         org = Organization(
             organization_name=name.strip(),
             organization_slug=slug.lower().strip(),
+            organization_type=org_type.strip() if org_type else "School",
+            organization_country=country.strip() if country else "US",
+            organization_state=state.strip() if state else "",
+            organization_city=city.strip() if city else "",
+            organization_timezone=timezone.strip() if timezone else "UTC",
             organization_logo=logo,
             organization_description=description,
             organization_owner_user_id=owner_user_id,

@@ -1,6 +1,7 @@
 import pytest
 import uuid
 from httpx import AsyncClient
+from app.modules.users.models import User
 from app.modules.users.service import UserService
 from app.modules.organizations.service import OrganizationService
 from app.modules.organizations.models import Organization, Workspace, Role, OrganizationMember
@@ -62,6 +63,15 @@ async def test_onboarding_atomic_transaction(client: AsyncClient, db_session):
     res = await client.post("/api/v1/organizations/onboarding", json=payload, headers=headers)
     assert res.status_code == 200
     assert res.json() == {"success": True, "message": "Organization onboarding completed successfully."}
+
+    # Verify organization details in database
+    wayne_org = (await db_session.execute(select(Organization).where(Organization.organization_slug == "wayne-ent"))).scalars().first()
+    assert wayne_org is not None
+    assert wayne_org.organization_type == "Company"
+    assert wayne_org.organization_country == "United States"
+    assert wayne_org.organization_state == "Gotham"
+    assert wayne_org.organization_city == "Gotham City"
+    assert wayne_org.organization_timezone == "America/New_York"
 
     # Verify status is now has_organization=True
     status_res = await client.get("/api/v1/organizations/status", headers=headers)
@@ -302,4 +312,131 @@ async def test_member_cannot_onboard_new_organization(client: AsyncClient, db_se
     # Verify organization B was not created
     org_b = (await db_session.execute(select(Organization).where(Organization.organization_slug == "org-b"))).scalars().first()
     assert org_b is None
+
+
+@pytest.mark.asyncio
+async def test_onboarding_persists_organization_type_university(client: AsyncClient, db_session):
+    """Regression test verifying an organization created with org_type='University' persists that value and all fields."""
+    user_service = UserService(db_session)
+    user = await user_service.create_user(email="univ_owner@example.com", password="Password123!")
+    await db_session.commit()
+
+    login_res = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "univ_owner@example.com", "password": "Password123!"}
+    )
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {
+        "org_name": "Gotham University",
+        "org_slug": "gotham-univ",
+        "org_type": "University",
+        "org_country": "United States",
+        "org_state": "New Jersey",
+        "org_city": "Gotham",
+        "org_timezone": "America/New_York",
+        "org_description": "A prestigious research university.",
+        "owner_first_name": "Lucius",
+        "owner_last_name": "Fox",
+        "owner_phone": "1234567890",
+        "workspace_name": "Applied Sciences Division"
+    }
+
+    res = await client.post("/api/v1/organizations/onboarding", json=payload, headers=headers)
+    assert res.status_code == 200
+    assert res.json() == {"success": True, "message": "Organization onboarding completed successfully."}
+
+    # Query organization directly from the database and verify all fields
+    stmt = select(Organization).where(Organization.organization_slug == "gotham-univ")
+    res_db = await db_session.execute(stmt)
+    org = res_db.scalars().first()
+
+    assert org is not None
+    assert org.organization_type == "University"
+    assert org.organization_name == "Gotham University"
+    assert org.organization_slug == "gotham-univ"
+    assert org.organization_country == "United States"
+    assert org.organization_state == "New Jersey"
+    assert org.organization_city == "Gotham"
+    assert org.organization_timezone == "America/New_York"
+    assert org.organization_description == "A prestigious research university."
+    assert org.organization_owner_user_id == user.user_id
+
+    # Verify initial workspace was created and linked
+    ws_stmt = select(Workspace).where(Workspace.workspace_organization_id == org.organization_id)
+    res_ws = await db_session.execute(ws_stmt)
+    workspace = res_ws.scalars().first()
+    assert workspace is not None
+    assert workspace.workspace_name == "Applied Sciences Division"
+    assert workspace.workspace_created_by == user.user_id
+
+    # Verify user profile updated
+    await db_session.refresh(user)
+    assert user.user_first_name == "Lucius"
+    assert user.user_last_name == "Fox"
+    assert user.user_phone == "1234567890"
+
+    # Verify organization member link
+    member_stmt = select(OrganizationMember).where(
+        OrganizationMember.organization_member_organization_id == org.organization_id,
+        OrganizationMember.organization_member_user_id == user.user_id
+    )
+    res_member = await db_session.execute(member_stmt)
+    member = res_member.scalars().first()
+    assert member is not None
+
+
+@pytest.mark.asyncio
+async def test_onboarding_transaction_rollback_on_failure(client: AsyncClient, db_session, monkeypatch):
+    """Verify that failure mid-onboarding cleanly rolls back all operations using savepoint."""
+    from app.modules.organizations.schemas import OnboardingRequest
+    from app.modules.organizations.repository import OrganizationRepository
+
+    user_service = UserService(db_session)
+    user = await user_service.create_user(
+        email="rollback_user@example.com",
+        password="Password123!",
+        first_name="InitialFirst",
+        last_name="InitialLast"
+    )
+    await db_session.commit()
+
+    payload = OnboardingRequest(
+        org_name="Rollback Academy",
+        org_slug="rollback-acad",
+        org_type="University",
+        org_country="United States",
+        org_state="California",
+        org_city="San Francisco",
+        org_timezone="America/Los_Angeles",
+        owner_first_name="NewFirst",
+        owner_last_name="NewLast",
+        owner_phone="5550001111",
+        workspace_name="Failing WS"
+    )
+
+    user_id = user.user_id
+
+    # Monkeypatch create_workspace to simulate mid-transaction failure
+    async def failing_create_workspace(*args, **kwargs):
+        raise RuntimeError("Simulated database failure during workspace creation")
+
+    monkeypatch.setattr(OrganizationRepository, "create_workspace", failing_create_workspace)
+
+    org_service = OrganizationService(db_session)
+    with pytest.raises(RuntimeError, match="Simulated database failure during workspace creation"):
+        await org_service.complete_onboarding(user, payload)
+
+    # Verify organization was rolled back and not persisted
+    stmt = select(Organization).where(Organization.organization_slug == "rollback-acad")
+    res_db = await db_session.execute(stmt)
+    assert res_db.scalars().first() is None
+
+    # Verify user profile updates were rolled back
+    user_fresh = await db_session.get(User, user_id)
+    assert user_fresh is not None
+    assert user_fresh.user_first_name == "InitialFirst"
+    assert user_fresh.user_last_name == "InitialLast"
+
 

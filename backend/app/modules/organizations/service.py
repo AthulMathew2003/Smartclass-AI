@@ -64,6 +64,11 @@ class OrganizationService:
                     name=payload.org_name,
                     slug=payload.org_slug,
                     owner_user_id=user.user_id,
+                    org_type=payload.org_type,
+                    country=payload.org_country,
+                    state=payload.org_state,
+                    city=payload.org_city,
+                    timezone=payload.org_timezone,
                     logo=payload.org_logo,
                     description=payload.org_description
                 )
