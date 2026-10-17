@@ -1,4 +1,8 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const cleanedApiUrl = rawApiUrl.trim().replace(/\/+$/, "");
+export const API_BASE_URL = cleanedApiUrl.endsWith("/api/v1")
+  ? cleanedApiUrl
+  : `${cleanedApiUrl}/api/v1`;
 
 import { apiFetch } from "./api";
 import { clearPermissions } from "./permissions";

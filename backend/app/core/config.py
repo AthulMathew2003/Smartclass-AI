@@ -11,6 +11,16 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+psycopg://", 1)
+            elif v.startswith("postgresql://"):
+                return v.replace("postgresql://", "postgresql+psycopg://", 1)
+        return v
+
     # Security & JWT
     SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
@@ -18,13 +28,15 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS Origins (accepts comma-separated string or list)
-    BACKEND_CORS_ORIGINS: Union[str, List[str]] = "http://localhost:3000"
+    BACKEND_CORS_ORIGINS: Union[str, List[str]] = "http://localhost:3000,https://smartclass-ai-1lek.onrender.com"
 
     @field_validator("BACKEND_CORS_ORIGINS")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
         if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
+            return [origin.strip().rstrip("/") for origin in v.split(",") if origin.strip()]
+        elif isinstance(v, list):
+            return [origin.strip().rstrip("/") for origin in v if isinstance(origin, str) and origin.strip()]
         return v
 
     # App URLs
