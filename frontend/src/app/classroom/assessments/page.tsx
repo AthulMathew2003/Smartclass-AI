@@ -242,14 +242,25 @@ export default function GlobalAssessmentsPage() {
           </p>
         </div>
         {isTeacherOrAdmin && (
-          <Button
-            onClick={() => setCreateOpen(true)}
-            className="flex items-center gap-2 shadow-sm font-medium"
-            style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
-          >
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            Create Assessment
-          </Button>
+          <div className="flex items-center gap-3">
+            <Link href="/classroom/assessments/generate">
+              <Button
+                variant="outline"
+                className="flex items-center gap-2 border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--primary)]/10 font-medium shadow-sm"
+              >
+                <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+                AI Paper Generator
+              </Button>
+            </Link>
+            <Button
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-2 shadow-sm font-medium"
+              style={{ backgroundColor: "var(--primary)", color: "var(--on-primary)" }}
+            >
+              <span className="material-symbols-outlined text-[18px]">add</span>
+              Create Assessment
+            </Button>
+          </div>
         )}
       </div>
 

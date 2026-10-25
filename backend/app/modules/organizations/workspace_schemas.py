@@ -29,4 +29,33 @@ class WorkspaceResponse(BaseModel):
     workspace_created_at: datetime
     workspace_updated_at: datetime
     member_count: int = 0
+    student_count: int = 0
     subject_count: int = 0
+
+
+class WorkspaceStudentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    status: Optional[str] = "active"
+    joined_at: Optional[datetime] = None
+
+
+class WorkspaceStudentsData(BaseModel):
+    items: List[WorkspaceStudentItem] = []
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
+
+
+class WorkspaceStudentsResponse(BaseModel):
+    success: bool = True
+    message: str = "Workspace students retrieved successfully"
+    data: WorkspaceStudentsData
+    request_id: Optional[str] = None

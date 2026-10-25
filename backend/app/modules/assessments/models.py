@@ -69,6 +69,20 @@ class CorrectnessStatus(str, Enum):
     PENDING = "pending"
 
 
+class GradingSource(str, Enum):
+    OBJECTIVE = "objective"
+    AI = "ai"
+    TEACHER = "teacher"
+
+
+class AiEvaluationStatus(str, Enum):
+    NONE = "none"
+    COMPLETED = "completed"
+    REVIEW_REQUIRED = "review_required"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
 
 class Assessment(Base):
     __tablename__ = "tbl_assessments"
@@ -231,6 +245,14 @@ class QuestionBankItem(Base):
         nullable=False
     )
     question_explanation: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+    question_expected_answer: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+    question_rubric: Mapped[str | None] = mapped_column(
         Text,
         nullable=True
     )
@@ -649,6 +671,48 @@ class AssessmentResultQuestion(Base):
     result_question_feedback: Mapped[str | None] = mapped_column(
         Text,
         nullable=True
+    )
+    result_question_grading_source: Mapped[GradingSource] = mapped_column(
+        SQLEnum(
+            GradingSource,
+            name="assessment_grading_source_enum",
+            values_callable=lambda obj: [e.value for e in obj]
+        ),
+        default=GradingSource.OBJECTIVE,
+        server_default="objective",
+        nullable=False
+    )
+    result_question_ai_evaluation_status: Mapped[AiEvaluationStatus] = mapped_column(
+        SQLEnum(
+            AiEvaluationStatus,
+            name="assessment_ai_evaluation_status_enum",
+            values_callable=lambda obj: [e.value for e in obj]
+        ),
+        default=AiEvaluationStatus.NONE,
+        server_default="none",
+        nullable=False
+    )
+    result_question_ai_suggested_marks: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=7, scale=2),
+        nullable=True
+    )
+    result_question_ai_confidence: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=3, scale=2),
+        nullable=True
+    )
+    result_question_ai_explanation: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+    result_question_ai_evaluation: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True
+    )
+    result_question_teacher_reviewed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False
     )
     result_question_graded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

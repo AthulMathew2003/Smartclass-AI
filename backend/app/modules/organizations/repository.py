@@ -328,19 +328,161 @@ class OrganizationRepository:
 
     async def count_workspace_members(self, workspace_id: uuid.UUID) -> int:
         """Count total members assigned to a workspace."""
-        stmt = select(WorkspaceMember).where(WorkspaceMember.workspace_member_workspace_id == workspace_id)
+        stmt = select(func.count(WorkspaceMember.workspace_member_id)).where(WorkspaceMember.workspace_member_workspace_id == workspace_id)
         result = await self.db.execute(stmt)
-        return len(result.scalars().all())
+        return int(result.scalar() or 0)
+
+    async def count_workspace_students(self, workspace_id: uuid.UUID) -> int:
+        """Count total students assigned to a workspace."""
+        from app.modules.rbac.constants import SystemRole
+        stmt = (
+            select(func.count(WorkspaceMember.workspace_member_id))
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .where(
+                WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                func.lower(Role.role_name) == func.lower(SystemRole.STUDENT)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return int(result.scalar() or 0)
 
     async def count_workspace_subjects(self, workspace_id: uuid.UUID) -> int:
         """Count total active subjects in a workspace."""
         from app.modules.subjects.models import Subject, SubjectStatus
-        stmt = select(Subject).where(
+        stmt = select(func.count(Subject.subject_id)).where(
             Subject.subject_workspace_id == workspace_id,
             Subject.subject_status == SubjectStatus.ACTIVE
         )
         result = await self.db.execute(stmt)
-        return len(result.scalars().all())
+        return int(result.scalar() or 0)
+
+    async def get_workspace_counts_by_org(
+        self,
+        org_id: uuid.UUID
+    ) -> Tuple[dict, dict, dict]:
+        """
+        Aggregate member_count, student_count, and subject_count across all
+        workspaces belonging to an organization in single grouped queries.
+        Returns: (member_counts, student_counts, subject_counts)
+        """
+        from app.modules.rbac.constants import SystemRole
+        from app.modules.subjects.models import Subject, SubjectStatus
+
+        # 1. Total members per workspace
+        member_stmt = (
+            select(
+                WorkspaceMember.workspace_member_workspace_id,
+                func.count(WorkspaceMember.workspace_member_id)
+            )
+            .join(Workspace, WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id)
+            .where(Workspace.workspace_organization_id == org_id)
+            .group_by(WorkspaceMember.workspace_member_workspace_id)
+        )
+        member_res = await self.db.execute(member_stmt)
+        member_counts = {ws_id: count for ws_id, count in member_res.all()}
+
+        # 2. Total students per workspace (filtering strictly to Student role)
+        student_stmt = (
+            select(
+                WorkspaceMember.workspace_member_workspace_id,
+                func.count(WorkspaceMember.workspace_member_id)
+            )
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .join(Workspace, WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id)
+            .where(
+                Workspace.workspace_organization_id == org_id,
+                func.lower(Role.role_name) == func.lower(SystemRole.STUDENT)
+            )
+            .group_by(WorkspaceMember.workspace_member_workspace_id)
+        )
+        student_res = await self.db.execute(student_stmt)
+        student_counts = {ws_id: count for ws_id, count in student_res.all()}
+
+        # 3. Total active subjects per workspace
+        subject_stmt = (
+            select(
+                Subject.subject_workspace_id,
+                func.count(Subject.subject_id)
+            )
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .where(
+                Workspace.workspace_organization_id == org_id,
+                Subject.subject_status == SubjectStatus.ACTIVE
+            )
+            .group_by(Subject.subject_workspace_id)
+        )
+        subject_res = await self.db.execute(subject_stmt)
+        subject_counts = {ws_id: count for ws_id, count in subject_res.all()}
+
+        return member_counts, student_counts, subject_counts
+
+    async def get_workspace_students(
+        self,
+        workspace_id: uuid.UUID,
+        search: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> Tuple[List[Tuple[User, WorkspaceMember, Optional[OrganizationMember]]], int]:
+        """
+        Retrieve students enrolled in a workspace with server-side search and pagination.
+        Filters strictly to the authoritative Student role.
+        """
+        from app.modules.rbac.constants import SystemRole
+
+        base_from = (
+            select(User, WorkspaceMember, OrganizationMember)
+            .join(WorkspaceMember, User.user_id == WorkspaceMember.workspace_member_user_id)
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .join(Workspace, WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id)
+            .outerjoin(
+                OrganizationMember,
+                and_(
+                    OrganizationMember.organization_member_user_id == User.user_id,
+                    OrganizationMember.organization_member_organization_id == Workspace.workspace_organization_id
+                )
+            )
+            .where(
+                WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                func.lower(Role.role_name) == func.lower(SystemRole.STUDENT)
+            )
+        )
+
+        count_stmt = (
+            select(func.count(WorkspaceMember.workspace_member_id))
+            .join(Role, WorkspaceMember.workspace_member_role_id == Role.role_id)
+            .join(User, User.user_id == WorkspaceMember.workspace_member_user_id)
+            .join(Workspace, WorkspaceMember.workspace_member_workspace_id == Workspace.workspace_id)
+            .where(
+                WorkspaceMember.workspace_member_workspace_id == workspace_id,
+                func.lower(Role.role_name) == func.lower(SystemRole.STUDENT)
+            )
+        )
+
+        if search and search.strip():
+            pat = f"%{search.strip()}%"
+            search_clause = or_(
+                User.user_email.ilike(pat),
+                User.user_first_name.ilike(pat),
+                User.user_last_name.ilike(pat),
+                func.concat(func.coalesce(User.user_first_name, ""), " ", func.coalesce(User.user_last_name, "")).ilike(pat)
+            )
+            base_from = base_from.where(search_clause)
+            count_stmt = count_stmt.where(search_clause)
+
+        total_res = await self.db.execute(count_stmt)
+        total = int(total_res.scalar() or 0)
+
+        offset = max(0, (page - 1) * page_size)
+        items_stmt = (
+            base_from
+            .order_by(User.user_first_name.asc(), User.user_last_name.asc(), User.user_email.asc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        items_res = await self.db.execute(items_stmt)
+        rows = list(items_res.all())
+        return rows, total
+
 
     async def update_workspace(
         self,

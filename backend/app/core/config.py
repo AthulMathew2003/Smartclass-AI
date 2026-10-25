@@ -87,6 +87,20 @@ class Settings(BaseSettings):
     AI_TUTOR_TEMPERATURE: float = 0.3
     AI_TUTOR_MAX_OUTPUT_TOKENS: int = 2048
 
+    # AI Semantic Grading Settings (Step 10.15)
+    GEMINI_GRADING_MODEL: str = "gemini-3.6-flash"
+    AI_GRADING_ENABLED: bool = True
+    AI_GRADING_CONFIDENCE_THRESHOLD: float = 0.70
+    AI_GRADING_TIMEOUT_SECONDS: int = 30
+    AI_GRADING_MAX_RETRIES: int = 2
+    AI_GRADING_REQUIRE_TEACHER_REVIEW: bool = False
+    AI_GRADING_ENABLE_RAG: bool = True
+
+    # AI Question Paper Generation Settings (Step 10.16)
+    QP_GENERATION_MODEL: str = "gemini-3.6-flash"
+    QP_GENERATION_TIMEOUT_SECONDS: int = 90
+    QP_GENERATION_MAX_RETRIES: int = 2
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

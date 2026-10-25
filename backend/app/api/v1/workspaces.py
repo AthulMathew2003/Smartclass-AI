@@ -1,6 +1,6 @@
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.modules.users.models import User
@@ -10,7 +10,8 @@ from app.modules.organizations.workspace_service import WorkspaceService
 from app.modules.organizations.workspace_schemas import (
     WorkspaceCreateRequest,
     WorkspaceUpdateRequest,
-    WorkspaceResponse
+    WorkspaceResponse,
+    WorkspaceStudentsResponse
 )
 from app.modules.rbac.dependencies import require_permission
 from app.modules.rbac.constants import WorkspacePermission
@@ -95,3 +96,25 @@ async def list_workspace_members(
     """List all members assigned to a specific workspace."""
     service = WorkspaceService(db)
     return await service.list_workspace_members(workspace_id, org_id)
+
+
+@router.get("/{workspace_id}/students", response_model=WorkspaceStudentsResponse)
+async def get_workspace_students(
+    workspace_id: uuid.UUID,
+    search: Optional[str] = Query(None, description="Search by student name or email"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    org_id: uuid.UUID = Depends(get_active_organization_id),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(WorkspacePermission.READ))
+):
+    """Retrieve students belonging to a workspace with search and pagination."""
+    service = WorkspaceService(db)
+    return await service.get_workspace_students(
+        workspace_id=workspace_id,
+        org_id=org_id,
+        search=search,
+        page=page,
+        page_size=page_size
+    )
+

@@ -23,7 +23,9 @@ from app.modules.assessments.models import (
     AssessmentResultQuestion,
     ResultStatus,
     GradingStatus,
-    CorrectnessStatus
+    CorrectnessStatus,
+    GradingSource,
+    AiEvaluationStatus
 )
 from app.modules.subjects.models import Subject, SubjectTeacher, SubjectStatus
 from app.modules.organizations.models import (
@@ -342,7 +344,9 @@ class AssessmentRepository:
         default_marks: Decimal,
         question_explanation: Optional[str],
         created_by: Optional[uuid.UUID],
-        options_data: Optional[List[dict]] = None
+        options_data: Optional[List[dict]] = None,
+        question_expected_answer: Optional[str] = None,
+        question_rubric: Optional[str] = None
     ) -> QuestionBankItem:
         question = QuestionBankItem(
             question_subject_id=subject_id,
@@ -350,6 +354,8 @@ class AssessmentRepository:
             question_text=question_text,
             question_default_marks=default_marks,
             question_explanation=question_explanation,
+            question_expected_answer=question_expected_answer,
+            question_rubric=question_rubric,
             question_status=QuestionStatus.ACTIVE,
             question_created_by=created_by
         )
@@ -424,7 +430,9 @@ class AssessmentRepository:
         default_marks: Optional[Decimal] = None,
         question_explanation: Optional[str] = None,
         question_type: Optional[QuestionType] = None,
-        options_data: Optional[List[dict]] = None
+        options_data: Optional[List[dict]] = None,
+        question_expected_answer: Optional[str] = None,
+        question_rubric: Optional[str] = None
     ) -> QuestionBankItem:
         if question_text is not None:
             question.question_text = question_text
@@ -432,6 +440,10 @@ class AssessmentRepository:
             question.question_default_marks = default_marks
         if question_explanation is not None:
             question.question_explanation = question_explanation
+        if question_expected_answer is not None:
+            question.question_expected_answer = question_expected_answer
+        if question_rubric is not None:
+            question.question_rubric = question_rubric
         if question_type is not None:
             question.question_type = question_type
 
@@ -923,6 +935,13 @@ class AssessmentRepository:
         correctness: CorrectnessStatus,
         grading_status: GradingStatus,
         feedback: Optional[str] = None,
+        grading_source: GradingSource = GradingSource.OBJECTIVE,
+        ai_evaluation_status: AiEvaluationStatus = AiEvaluationStatus.NONE,
+        ai_suggested_marks: Optional[Decimal] = None,
+        ai_confidence: Optional[Decimal] = None,
+        ai_explanation: Optional[str] = None,
+        ai_evaluation: Optional[dict] = None,
+        teacher_reviewed: bool = False,
         graded_by: Optional[uuid.UUID] = None,
         graded_at: Optional[datetime] = None
     ) -> AssessmentResultQuestion:
@@ -935,6 +954,13 @@ class AssessmentRepository:
             result_question_correctness=correctness,
             result_question_grading_status=grading_status,
             result_question_feedback=feedback,
+            result_question_grading_source=grading_source,
+            result_question_ai_evaluation_status=ai_evaluation_status,
+            result_question_ai_suggested_marks=ai_suggested_marks,
+            result_question_ai_confidence=ai_confidence,
+            result_question_ai_explanation=ai_explanation,
+            result_question_ai_evaluation=ai_evaluation,
+            result_question_teacher_reviewed=teacher_reviewed,
             result_question_graded_by=graded_by,
             result_question_graded_at=graded_at
         )

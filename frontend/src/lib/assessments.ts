@@ -84,6 +84,8 @@ export interface QuestionBankItem {
   question_text: string;
   question_default_marks: number | string;
   question_explanation?: string | null;
+  question_expected_answer?: string | null;
+  question_rubric?: string | null;
   question_status: QuestionStatus;
   question_created_by?: string | null;
   question_created_at: string;
@@ -103,6 +105,8 @@ export interface QuestionBankItemCreateInput {
   question_text: string;
   default_marks?: number;
   question_explanation?: string | null;
+  question_expected_answer?: string | null;
+  question_rubric?: string | null;
   options?: QuestionOptionCreateInput[];
 }
 
@@ -111,6 +115,8 @@ export interface QuestionBankItemUpdateInput {
   question_text?: string;
   default_marks?: number;
   question_explanation?: string | null;
+  question_expected_answer?: string | null;
+  question_rubric?: string | null;
   options?: QuestionOptionCreateInput[];
 }
 
@@ -500,6 +506,27 @@ export async function submitAssessmentAttempt(
 export type ResultStatus = "pending_manual_grading" | "completed";
 export type GradingStatus = "pending" | "graded";
 export type CorrectnessStatus = "correct" | "incorrect" | "unanswered" | "pending";
+export type GradingSource = "objective" | "ai" | "teacher";
+export type AiEvaluationStatus = "none" | "completed" | "review_required" | "failed" | "skipped";
+
+export interface AiEvaluationDetail {
+  suggested_marks?: number;
+  max_marks?: number;
+  explanation?: string;
+  strengths?: string[];
+  missing_concepts?: string[];
+  confidence?: number;
+  review_recommended?: boolean;
+  student_feedback?: string;
+  evaluation_status?: string;
+  grading_source?: string;
+  sources?: Array<{
+    material_id?: string;
+    material_title?: string;
+    filename?: string;
+    score?: number;
+  }>;
+}
 
 export interface AssessmentResultQuestion {
   result_question_id: string;
@@ -508,6 +535,8 @@ export interface AssessmentResultQuestion {
   question_type: QuestionType;
   question_text: string;
   question_explanation?: string | null;
+  question_expected_answer?: string | null;
+  question_rubric?: string | null;
   options: QuestionOption[];
   answer_value?: StudentAttemptAnswer | null;
   marks_available: number | string;
@@ -515,6 +544,13 @@ export interface AssessmentResultQuestion {
   correctness: CorrectnessStatus;
   grading_status: GradingStatus;
   feedback?: string | null;
+  grading_source?: GradingSource;
+  ai_evaluation_status?: AiEvaluationStatus;
+  ai_suggested_marks?: number | string | null;
+  ai_confidence?: number | null;
+  ai_explanation?: string | null;
+  ai_evaluation?: AiEvaluationDetail | null;
+  teacher_reviewed?: boolean;
   graded_by?: string | null;
   graded_at?: string | null;
 }
@@ -565,6 +601,11 @@ export interface ManualGradeInput {
   feedback?: string | null;
 }
 
+export interface TeacherApproveGradeInput {
+  marks_awarded?: number;
+  feedback?: string | null;
+}
+
 export async function fetchAttemptResult(
   assessmentId: string,
   attemptId: string
@@ -586,6 +627,22 @@ export async function gradeAssessmentQuestion(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function approveAssessmentQuestionGrade(
+  assessmentId: string,
+  attemptId: string,
+  questionId: string,
+  input?: TeacherApproveGradeInput
+): Promise<AssessmentResult> {
+  return await apiFetch<AssessmentResult>(
+    `/assessments/${encodeURIComponent(assessmentId)}/attempts/${encodeURIComponent(attemptId)}/questions/${encodeURIComponent(questionId)}/approve`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input || {}),
     }
   );
 }
@@ -1127,6 +1184,284 @@ export async function importBulkQuestions(
     {
       method: "POST",
       body: formData,
+    }
+  );
+}
+
+// ── Question Paper Generator (Step 10.16) ─────────────────────────
+
+export type QpDifficulty = "easy" | "medium" | "hard" | "mixed";
+export type QpQuestionType = "mcq_single" | "true_false" | "short_answer";
+export type QpDraftStatus = "generating" | "ready" | "failed" | "converted";
+
+export interface QpSectionConfig {
+  section_title: string;
+  section_instructions?: string | null;
+  question_types: QpQuestionType[];
+  question_count: number;
+  marks_per_question?: number | null;
+  difficulty?: QpDifficulty;
+}
+
+export interface QpGenerateRequest {
+  title: string;
+  description?: string | null;
+  material_ids: string[];
+  topics?: string[] | null;
+  total_marks: number;
+  duration_minutes?: number | null;
+  difficulty?: QpDifficulty;
+  total_questions?: number | null;
+  question_types?: QpQuestionType[] | null;
+  sections?: QpSectionConfig[] | null;
+  generate_answer_key?: boolean;
+  generate_rubrics?: boolean;
+  additional_instructions?: string | null;
+}
+
+export interface QpOptionInput {
+  text: string;
+  is_correct: boolean;
+}
+
+export interface QpDraftQuestionUpdateInput {
+  question_text?: string;
+  marks?: number;
+  difficulty?: QpDifficulty;
+  options?: QpOptionInput[];
+  expected_answer?: string;
+  rubric?: string;
+  explanation?: string;
+  is_flagged?: boolean;
+}
+
+export interface QpRegenerateQuestionRequest {
+  question_type?: QpQuestionType;
+  difficulty?: QpDifficulty;
+  marks?: number;
+  additional_instructions?: string;
+}
+
+export interface QpConvertRequest {
+  assessment_type: string;
+  passing_marks?: number | null;
+  attempt_limit?: number;
+  randomize_questions?: boolean;
+  start_at?: string | null;
+  end_at?: string | null;
+}
+
+export interface QpConvertResponse {
+  assessment_id: string;
+  status: string;
+  message: string;
+}
+
+export interface QpSourceChunk {
+  material_id: string;
+  material_title: string;
+  chunk_index: number;
+  page_number?: number | null;
+  slide_number?: number | null;
+  content_preview?: string;
+}
+
+export interface QpDraftQuestionResponse {
+  dq_id: string;
+  dq_order: number;
+  dq_question_type: string;
+  dq_question_text: string;
+  dq_marks: number;
+  dq_difficulty: string;
+  dq_options?: Array<{ text: string; is_correct: boolean }> | null;
+  dq_expected_answer?: string | null;
+  dq_rubric?: string | null;
+  dq_explanation?: string | null;
+  dq_source_material_ids: string[];
+  dq_source_chunks?: QpSourceChunk[] | null;
+  dq_is_flagged: boolean;
+  dq_created_at: string;
+  dq_updated_at: string;
+}
+
+export interface QpValidationIssue {
+  severity: "error" | "warning";
+  question_index?: number | null;
+  message: string;
+}
+
+export interface QpValidationResult {
+  is_valid: boolean;
+  total_marks_actual: number;
+  total_marks_expected: number;
+  question_count_actual: number;
+  issues: QpValidationIssue[];
+  flagged_count: number;
+}
+
+export interface QpMaterialSummary {
+  material_id: string;
+  title: string;
+  original_filename: string;
+  index_status: string;
+  chunk_count: number;
+}
+
+export interface QpDraftResponse {
+  draft_id: string;
+  draft_subject_id: string;
+  draft_title: string;
+  draft_description?: string | null;
+  draft_status: QpDraftStatus;
+  draft_config: Record<string, any>;
+  draft_validation_result?: QpValidationResult | null;
+  draft_generation_error?: string | null;
+  draft_converted_assessment_id?: string | null;
+  draft_created_at: string;
+  draft_updated_at: string;
+  questions: QpDraftQuestionResponse[];
+  subject_name?: string | null;
+  material_summaries?: QpMaterialSummary[] | null;
+}
+
+export interface QpDraftListItem {
+  draft_id: string;
+  draft_subject_id: string;
+  draft_title: string;
+  draft_status: string;
+  question_count: number;
+  total_marks?: number | null;
+  draft_converted_assessment_id?: string | null;
+  draft_created_at: string;
+  draft_updated_at: string;
+}
+
+export interface QpMaterialListResponse {
+  subject_id: string;
+  subject_name: string;
+  materials: QpMaterialSummary[];
+}
+
+export async function fetchSubjectMaterialsForQp(
+  subjectId: string
+): Promise<QpMaterialListResponse> {
+  return await apiFetch<QpMaterialListResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/materials`
+  );
+}
+
+export async function fetchQpDrafts(
+  subjectId: string
+): Promise<QpDraftListItem[]> {
+  return await apiFetch<QpDraftListItem[]>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts`
+  );
+}
+
+export async function generateQpDraft(
+  subjectId: string,
+  payload: QpGenerateRequest
+): Promise<QpDraftResponse> {
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function getQpDraft(
+  subjectId: string,
+  draftId: string
+): Promise<QpDraftResponse> {
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}`
+  );
+}
+
+export async function updateQpDraftMetadata(
+  subjectId: string,
+  draftId: string,
+  title?: string,
+  description?: string
+): Promise<QpDraftResponse> {
+  const params = new URLSearchParams();
+  if (title) params.append("title", title);
+  if (description !== undefined) params.append("description", description || "");
+
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}?${params.toString()}`,
+    {
+      method: "PATCH",
+    }
+  );
+}
+
+export async function updateQpDraftQuestion(
+  subjectId: string,
+  draftId: string,
+  dqId: string,
+  payload: QpDraftQuestionUpdateInput
+): Promise<QpDraftResponse> {
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}/questions/${encodeURIComponent(dqId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function regenerateQpQuestion(
+  subjectId: string,
+  draftId: string,
+  dqId: string,
+  payload: QpRegenerateQuestionRequest
+): Promise<QpDraftResponse> {
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}/questions/${encodeURIComponent(dqId)}/regenerate`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function validateQpDraft(
+  subjectId: string,
+  draftId: string
+): Promise<QpDraftResponse> {
+  return await apiFetch<QpDraftResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}/validate`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function convertQpDraftToAssessment(
+  subjectId: string,
+  draftId: string,
+  payload: QpConvertRequest
+): Promise<QpConvertResponse> {
+  return await apiFetch<QpConvertResponse>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}/convert`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function deleteQpDraft(
+  subjectId: string,
+  draftId: string
+): Promise<void> {
+  await apiFetch<void>(
+    `/subjects/${encodeURIComponent(subjectId)}/question-paper-drafts/${encodeURIComponent(draftId)}`,
+    {
+      method: "DELETE",
     }
   );
 }

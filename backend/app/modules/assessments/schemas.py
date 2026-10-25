@@ -12,7 +12,9 @@ from app.modules.assessments.models import (
     AttemptStatus,
     ResultStatus,
     GradingStatus,
-    CorrectnessStatus
+    CorrectnessStatus,
+    GradingSource,
+    AiEvaluationStatus
 )
 from app.core.exceptions import ValidationException
 
@@ -281,6 +283,8 @@ class QuestionBankItemCreate(BaseModel):
     question_text: str = Field(..., min_length=1, validation_alias=AliasChoices("question_text", "text"), description="Question prompt / text")
     default_marks: Decimal = Field(Decimal("1.00"), gt=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("default_marks", "marks", "question_default_marks", "question_marks"), description="Default marks")
     question_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("question_explanation", "explanation"), description="Teacher-only explanation")
+    question_expected_answer: Optional[str] = Field(None, validation_alias=AliasChoices("question_expected_answer", "expected_answer", "answer_key"), description="Expected answer or reference answer key for subjective questions")
+    question_rubric: Optional[str] = Field(None, validation_alias=AliasChoices("question_rubric", "rubric", "marking_rubric"), description="Teacher marking rubric or grading criteria")
     options: List[QuestionOptionCreate] = Field(default_factory=list, description="Question options")
 
     @field_validator("question_text")
@@ -313,6 +317,8 @@ class QuestionBankItemUpdate(BaseModel):
     question_text: Optional[str] = Field(None, min_length=1, validation_alias=AliasChoices("question_text", "text"))
     default_marks: Optional[Decimal] = Field(None, gt=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("default_marks", "marks", "question_default_marks", "question_marks"))
     question_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("question_explanation", "explanation"))
+    question_expected_answer: Optional[str] = Field(None, validation_alias=AliasChoices("question_expected_answer", "expected_answer", "answer_key"))
+    question_rubric: Optional[str] = Field(None, validation_alias=AliasChoices("question_rubric", "rubric", "marking_rubric"))
     options: Optional[List[QuestionOptionCreate]] = Field(None, description="Updated question options")
 
     @field_validator("question_text")
@@ -345,6 +351,8 @@ class QuestionBankItemResponse(BaseModel):
     question_text: str = Field(..., validation_alias=AliasChoices("question_text", "text"))
     question_default_marks: Decimal = Field(..., validation_alias=AliasChoices("question_default_marks", "default_marks", "marks"))
     question_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("question_explanation", "explanation"))
+    question_expected_answer: Optional[str] = Field(None, validation_alias=AliasChoices("question_expected_answer", "expected_answer"))
+    question_rubric: Optional[str] = Field(None, validation_alias=AliasChoices("question_rubric", "rubric"))
     question_status: QuestionStatus = Field(..., validation_alias=AliasChoices("question_status", "status"))
     question_created_by: Optional[uuid.UUID] = Field(None, validation_alias=AliasChoices("question_created_by", "created_by"))
     question_created_at: datetime = Field(..., validation_alias=AliasChoices("question_created_at", "created_at"))
@@ -378,6 +386,8 @@ class AssessmentCreateAndAddQuestionRequest(BaseModel):
     question_text: str = Field(..., min_length=1, validation_alias=AliasChoices("question_text", "text"))
     marks: Decimal = Field(Decimal("1.00"), gt=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("marks", "question_marks", "default_marks"))
     question_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("question_explanation", "explanation"))
+    question_expected_answer: Optional[str] = Field(None, validation_alias=AliasChoices("question_expected_answer", "expected_answer", "answer_key"))
+    question_rubric: Optional[str] = Field(None, validation_alias=AliasChoices("question_rubric", "rubric", "marking_rubric"))
     options: List[QuestionOptionCreate] = Field(default_factory=list)
     order: Optional[int] = Field(None, ge=1)
 
@@ -444,6 +454,8 @@ class AssessmentQuestionResponse(BaseModel):
     question_type: QuestionType = Field(..., validation_alias=AliasChoices("question_type", "type"))
     question_text: str = Field(..., validation_alias=AliasChoices("question_text", "text"))
     question_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("question_explanation", "explanation"))
+    question_expected_answer: Optional[str] = Field(None, validation_alias=AliasChoices("question_expected_answer", "expected_answer"))
+    question_rubric: Optional[str] = Field(None, validation_alias=AliasChoices("question_rubric", "rubric"))
     options: List[QuestionOptionResponse] = Field(default_factory=list)
 
 
@@ -573,8 +585,23 @@ class AssessmentResultQuestionResponse(BaseModel):
     correctness: CorrectnessStatus = Field(..., validation_alias=AliasChoices("result_question_correctness", "correctness"))
     grading_status: GradingStatus = Field(..., validation_alias=AliasChoices("result_question_grading_status", "grading_status"))
     feedback: Optional[str] = Field(None, validation_alias=AliasChoices("result_question_feedback", "feedback"))
+    grading_source: GradingSource = Field(GradingSource.OBJECTIVE, validation_alias=AliasChoices("result_question_grading_source", "grading_source"))
+    ai_evaluation_status: AiEvaluationStatus = Field(AiEvaluationStatus.NONE, validation_alias=AliasChoices("result_question_ai_evaluation_status", "ai_evaluation_status"))
+    ai_suggested_marks: Optional[Decimal] = Field(None, validation_alias=AliasChoices("result_question_ai_suggested_marks", "ai_suggested_marks"))
+    ai_confidence: Optional[Decimal] = Field(None, validation_alias=AliasChoices("result_question_ai_confidence", "ai_confidence"))
+    ai_explanation: Optional[str] = Field(None, validation_alias=AliasChoices("result_question_ai_explanation", "ai_explanation"))
+    ai_evaluation: Optional[Dict[str, Any]] = Field(None, validation_alias=AliasChoices("result_question_ai_evaluation", "ai_evaluation"))
+    teacher_reviewed: bool = Field(False, validation_alias=AliasChoices("result_question_teacher_reviewed", "teacher_reviewed"))
     graded_by: Optional[uuid.UUID] = Field(None, validation_alias=AliasChoices("result_question_graded_by", "graded_by"))
     graded_at: Optional[datetime] = Field(None, validation_alias=AliasChoices("result_question_graded_at", "graded_at"))
+
+
+class TeacherApproveGradeInput(BaseModel):
+    """Payload for teacher approving or slightly refining an AI-suggested grade."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    marks_awarded: Optional[Decimal] = Field(None, ge=0, max_digits=7, decimal_places=2, validation_alias=AliasChoices("marks_awarded", "marks", "score"))
+    feedback: Optional[str] = Field(None, max_length=5000, validation_alias=AliasChoices("feedback", "comments", "teacher_feedback"))
 
 
 class AssessmentResultResponse(BaseModel):

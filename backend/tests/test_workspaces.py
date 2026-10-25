@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -172,3 +173,142 @@ async def test_workspace_crud_and_security(client: AsyncClient, db_session):
 
     suspended_org_res = await client.get("/api/v1/workspaces", headers=headers_a)
     assert suspended_org_res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_workspace_students_directory_and_counts(client: AsyncClient, db_session):
+    user_service = UserService(db_session)
+    member_service = MemberService(db_session)
+
+    # 1. Create owner and organization
+    owner = await user_service.create_user(email="ws_stud_owner@example.com", password="Password123!")
+    await db_session.commit()
+
+    login_res = await client.post("/api/v1/auth/login", json={"email": "ws_stud_owner@example.com", "password": "Password123!"})
+    token = login_res.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    onboard_payload = {
+        "org_name": "Student Count Academy",
+        "org_slug": "stud-count-academy",
+        "org_type": "University",
+        "org_country": "USA",
+        "org_state": "CA",
+        "org_city": "Stanford",
+        "org_timezone": "America/Los_Angeles",
+        "owner_first_name": "Jane",
+        "owner_last_name": "Stanford",
+        "workspace_name": "Engineering Campus"
+    }
+    onboard_res = await client.post("/api/v1/organizations/onboarding", json=onboard_payload, headers=headers)
+    assert onboard_res.status_code == 200
+
+    org = (await db_session.execute(select(Organization).where(Organization.organization_slug == "stud-count-academy"))).scalars().first()
+    headers["X-Organization-Id"] = str(org.organization_id)
+
+    # Fetch initial workspace created during onboarding
+    ws_list_res = await client.get("/api/v1/workspaces", headers=headers)
+    assert ws_list_res.status_code == 200
+    ws_id = ws_list_res.json()[0]["workspace_id"]
+
+    # 2. Resolve roles (Student & Teacher)
+    from app.modules.rbac.repository import RBACRepository
+    rbac_repo = RBACRepository(db_session)
+    roles = await rbac_repo.get_roles_for_organization(org.organization_id)
+    student_role = next(r for r in roles if r.role_name == "Student")
+    teacher_role = next(r for r in roles if r.role_name == "Teacher")
+
+    ws_uuid = uuid.UUID(ws_id)
+
+    # 3. Add 1 Teacher to the workspace
+    await member_service.create_member(org.organization_id, type("Req", (), {
+        "email": "faculty_prof@example.com",
+        "first_name": "Alan",
+        "last_name": "Turing",
+        "phone": None,
+        "role_id": teacher_role.role_id,
+        "workspace_ids": [ws_uuid]
+    })())
+
+    # 4. Add 3 Students to the workspace
+    await member_service.create_member(org.organization_id, type("Req", (), {
+        "email": "alice_stud@example.com",
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "phone": None,
+        "role_id": student_role.role_id,
+        "workspace_ids": [ws_uuid]
+    })())
+
+    await member_service.create_member(org.organization_id, type("Req", (), {
+        "email": "bob_stud@example.com",
+        "first_name": "Bob",
+        "last_name": "Jones",
+        "phone": None,
+        "role_id": student_role.role_id,
+        "workspace_ids": [ws_uuid]
+    })())
+
+    await member_service.create_member(org.organization_id, type("Req", (), {
+        "email": "charlie_stud@example.com",
+        "first_name": "Charlie",
+        "last_name": "Brown",
+        "phone": None,
+        "role_id": student_role.role_id,
+        "workspace_ids": [ws_uuid]
+    })())
+    await db_session.commit()
+
+    # 5. Verify Workspace listing reflects accurate student count (excluding Teacher and Owner)
+    ws_updated_res = await client.get("/api/v1/workspaces", headers=headers)
+    assert ws_updated_res.status_code == 200
+    ws_data = ws_updated_res.json()[0]
+    assert ws_data["student_count"] == 3
+    # Total members = owner (1) + teacher (1) + students (3) = 5
+    assert ws_data["member_count"] == 5
+
+    # 6. Verify Workspace Students Directory endpoint
+    students_res = await client.get(f"/api/v1/workspaces/{ws_id}/students", headers=headers)
+    assert students_res.status_code == 200
+    resp_body = students_res.json()
+    assert resp_body["success"] is True
+    assert resp_body["message"] == "Workspace students retrieved successfully"
+    assert resp_body["data"]["total"] == 3
+    assert len(resp_body["data"]["items"]) == 3
+    # Check that teacher is NOT in students
+    student_emails = [item["email"] for item in resp_body["data"]["items"]]
+    assert "faculty_prof@example.com" not in student_emails
+    assert "alice_stud@example.com" in student_emails
+    assert "bob_stud@example.com" in student_emails
+    assert "charlie_stud@example.com" in student_emails
+
+    # 7. Search filter test
+    search_res = await client.get(f"/api/v1/workspaces/{ws_id}/students?search=alice", headers=headers)
+    assert search_res.status_code == 200
+    search_body = search_res.json()
+    assert search_body["data"]["total"] == 1
+    assert search_body["data"]["items"][0]["email"] == "alice_stud@example.com"
+    assert search_body["data"]["items"][0]["name"] == "Alice Smith"
+
+    # 8. Pagination test
+    paged_res = await client.get(f"/api/v1/workspaces/{ws_id}/students?page=1&page_size=2", headers=headers)
+    assert paged_res.status_code == 200
+    paged_body = paged_res.json()
+    assert len(paged_body["data"]["items"]) == 2
+    assert paged_body["data"]["total"] == 3
+    assert paged_body["data"]["page"] == 1
+    assert paged_body["data"]["page_size"] == 2
+    assert paged_body["data"]["total_pages"] == 2
+
+    # 9. Tenant isolation test: user from another org cannot view students
+    other_owner = await user_service.create_user(email="other_tenant@example.com", password="Password123!")
+    await db_session.commit()
+    other_login = await client.post("/api/v1/auth/login", json={"email": "other_tenant@example.com", "password": "Password123!"})
+    other_headers = {
+        "Authorization": f"Bearer {other_login.json()['access_token']}",
+        "X-Organization-Id": str(org.organization_id)
+    }
+    # other_owner is not in org -> 403
+    forbidden_res = await client.get(f"/api/v1/workspaces/{ws_id}/students", headers=other_headers)
+    assert forbidden_res.status_code == 403
+

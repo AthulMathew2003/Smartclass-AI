@@ -48,3 +48,16 @@ class AttemptExpiredException(AppException):
     def __init__(self, message: str = "This assessment attempt has expired and can no longer be modified."):
         super().__init__(message=message, code="ATTEMPT_EXPIRED", status_code=410)
 
+
+class AiServiceException(AppException):
+    """Raised when an external AI service fails, encounters provider errors, or is unreachable."""
+    def __init__(self, message: str = "AI service request failed.", code: str = "AI_SERVICE_ERROR", status_code: int = 502):
+        super().__init__(message=message, code=code, status_code=status_code)
+
+
+class AiTimeoutException(AppException):
+    """Raised when an external AI service request times out."""
+    def __init__(self, message: str = "AI service request timed out.", code: str = "AI_TIMEOUT", status_code: int = 504):
+        super().__init__(message=message, code=code, status_code=status_code)
+
+

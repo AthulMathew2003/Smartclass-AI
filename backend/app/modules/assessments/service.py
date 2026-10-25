@@ -25,8 +25,13 @@ from app.modules.assessments.models import (
     AssessmentResultQuestion,
     ResultStatus,
     GradingStatus,
-    CorrectnessStatus
+    CorrectnessStatus,
+    GradingSource,
+    AiEvaluationStatus
 )
+from app.core.config import settings
+from app.modules.assessments.ai_grading_service import AiGradingService, AiGradingResult
+
 from app.modules.assessments.schemas import (
     AssessmentCreateRequest,
     AssessmentUpdateRequest,
@@ -47,6 +52,7 @@ from app.modules.assessments.schemas import (
     AssessmentAttemptResponse,
     AssessmentAttemptSummaryResponse,
     ManualGradeInput,
+    TeacherApproveGradeInput,
     AssessmentResultQuestionResponse,
     AssessmentResultResponse,
     TeacherAssessmentResultSummaryResponse,
@@ -93,9 +99,14 @@ from app.core.exceptions import (
 
 
 class AssessmentService:
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self,
+        db: AsyncSession,
+        ai_grading_service: Optional[AiGradingService] = None
+    ):
         self.db = db
         self.repo = AssessmentRepository(db)
+        self.ai_grading_service = ai_grading_service or AiGradingService()
 
     # ── Context and Authorization Verifications ─────────────────
 
@@ -596,7 +607,9 @@ class AssessmentService:
             default_marks=payload.default_marks,
             question_explanation=payload.question_explanation,
             created_by=requesting_user_id,
-            options_data=options_data
+            options_data=options_data,
+            question_expected_answer=payload.question_expected_answer,
+            question_rubric=payload.question_rubric
         )
         return QuestionBankItemResponse.model_validate(question)
 
@@ -698,7 +711,9 @@ class AssessmentService:
             default_marks=payload.default_marks,
             question_explanation=payload.question_explanation,
             question_type=payload.question_type,
-            options_data=options_data
+            options_data=options_data,
+            question_expected_answer=payload.question_expected_answer,
+            question_rubric=payload.question_rubric
         )
         return QuestionBankItemResponse.model_validate(updated)
 
@@ -736,7 +751,9 @@ class AssessmentService:
         question_text: str,
         marks: Decimal,
         question_explanation: Optional[str],
-        options: List[Any]
+        options: List[Any],
+        question_expected_answer: Optional[str] = None,
+        question_rubric: Optional[str] = None
     ) -> dict:
         """Construct immutable JSON snapshot of question content for assessment."""
         formatted_options = []
@@ -770,6 +787,8 @@ class AssessmentService:
             "question_text": question_text,
             "question_marks": float(marks),
             "question_explanation": question_explanation,
+            "question_expected_answer": question_expected_answer,
+            "question_rubric": question_rubric,
             "options": formatted_options
         }
 
@@ -803,6 +822,9 @@ class AssessmentService:
                 "options": student_options
             }
 
+        q_expected = snapshot.get("question_expected_answer")
+        q_rubric = snapshot.get("question_rubric")
+
         teacher_options = [
             {
                 "option_id": opt.get("option_id"),
@@ -823,6 +845,8 @@ class AssessmentService:
             "question_type": q_type,
             "question_text": q_text,
             "question_explanation": q_explanation,
+            "question_expected_answer": q_expected,
+            "question_rubric": q_rubric,
             "options": teacher_options
         }
 
@@ -870,7 +894,9 @@ class AssessmentService:
             question_text=question.question_text,
             marks=marks,
             question_explanation=question.question_explanation,
-            options=question.options
+            options=question.options,
+            question_expected_answer=question.question_expected_answer,
+            question_rubric=question.question_rubric
         )
 
         aq = await self.repo.create_assessment_question(
@@ -927,7 +953,9 @@ class AssessmentService:
             default_marks=marks,
             question_explanation=payload.question_explanation,
             created_by=requesting_user_id,
-            options_data=options_data
+            options_data=options_data,
+            question_expected_answer=payload.question_expected_answer,
+            question_rubric=payload.question_rubric
         )
 
         # 2. Add to Assessment
@@ -940,7 +968,9 @@ class AssessmentService:
             question_text=bank_item.question_text,
             marks=marks,
             question_explanation=bank_item.question_explanation,
-            options=bank_item.options
+            options=bank_item.options,
+            question_expected_answer=bank_item.question_expected_answer,
+            question_rubric=bank_item.question_rubric
         )
 
         aq = await self.repo.create_assessment_question(
@@ -1614,6 +1644,14 @@ class AssessmentService:
 
         question_evaluations = []
 
+        stmt = (
+            select(Subject, Workspace)
+            .join(Workspace, Subject.subject_workspace_id == Workspace.workspace_id)
+            .where(Subject.subject_id == assessment.assessment_subject_id)
+        )
+        row = (await self.db.execute(stmt)).first()
+        sub_obj, ws_obj = row if row else (None, None)
+
         for aq in questions:
             marks_available = aq.assessment_question_marks
             total_marks += marks_available
@@ -1662,6 +1700,13 @@ class AssessmentService:
                     "correctness": correctness,
                     "grading_status": status,
                     "feedback": None,
+                    "grading_source": GradingSource.OBJECTIVE,
+                    "ai_evaluation_status": AiEvaluationStatus.NONE,
+                    "ai_suggested_marks": None,
+                    "ai_confidence": None,
+                    "ai_explanation": None,
+                    "ai_evaluation": None,
+                    "teacher_reviewed": False,
                     "graded_by": None,
                     "graded_at": datetime.now(timezone.utc)
                 })
@@ -1701,12 +1746,30 @@ class AssessmentService:
                     "correctness": correctness,
                     "grading_status": status,
                     "feedback": None,
+                    "grading_source": GradingSource.OBJECTIVE,
+                    "ai_evaluation_status": AiEvaluationStatus.NONE,
+                    "ai_suggested_marks": None,
+                    "ai_confidence": None,
+                    "ai_explanation": None,
+                    "ai_evaluation": None,
+                    "teacher_reviewed": False,
                     "graded_by": None,
                     "graded_at": datetime.now(timezone.utc)
                 })
 
             elif q_type == "short_answer":
                 text_ans = (ans_value.get("text_answer") or "").strip() if ans_value else ""
+                expected_ans = (
+                    snapshot.get("question_expected_answer")
+                    or snapshot.get("expected_answer")
+                    or snapshot.get("question_explanation")
+                    or snapshot.get("explanation")
+                )
+                rubric_text = (
+                    snapshot.get("question_rubric")
+                    or snapshot.get("rubric")
+                )
+
                 if not text_ans:
                     # Unanswered short answer -> graded as 0.00, unanswered
                     correctness = CorrectnessStatus.UNANSWERED
@@ -1714,13 +1777,85 @@ class AssessmentService:
                     status = GradingStatus.GRADED
                     unanswered_count += 1
                     graded_at = datetime.now(timezone.utc)
+                    grading_source = GradingSource.OBJECTIVE
+                    ai_eval_status = AiEvaluationStatus.NONE
+                    ai_suggested = Decimal("0.00")
+                    ai_conf = Decimal("1.00")
+                    ai_expl = "No response was submitted by the student."
+                    ai_eval_dict = None
+                    feedback = None
                 else:
-                    # Provided text -> pending teacher manual evaluation
-                    correctness = CorrectnessStatus.PENDING
-                    awarded = Decimal("0.00")
-                    status = GradingStatus.PENDING
-                    pending_count += 1
-                    graded_at = None
+                    # Non-empty response: Evaluate using AI Grading Service if enabled
+                    ai_grading_enabled = getattr(settings, "AI_GRADING_ENABLED", True)
+                    if ai_grading_enabled:
+                        rag_context = None
+                        if getattr(settings, "AI_GRADING_ENABLE_RAG", True) and sub_obj and ws_obj:
+                            try:
+                                rag_context = await self.ai_grading_service.retrieve_supporting_context(
+                                    org_id=ws_obj.workspace_organization_id,
+                                    workspace_id=ws_obj.workspace_id,
+                                    subject_id=sub_obj.subject_id,
+                                    query=snapshot.get("question_text", "")
+                                )
+                            except Exception as rag_err:
+                                logger.debug(f"RAG context retrieval skipped: {str(rag_err)}")
+                                rag_context = None
+
+                        ai_res = await self.ai_grading_service.grade_short_answer(
+                            question_text=snapshot.get("question_text", ""),
+                            student_answer=text_ans,
+                            available_marks=marks_available,
+                            expected_answer=expected_ans,
+                            rubric=rubric_text,
+                            question_snapshot=snapshot,
+                            supporting_context=rag_context,
+                            question_type="short_answer"
+                        )
+
+                        ai_suggested = ai_res.suggested_marks
+                        ai_conf = Decimal(str(round(ai_res.confidence, 2)))
+                        ai_expl = ai_res.explanation
+                        ai_eval_dict = ai_res.to_dict()
+                        ai_eval_status = AiEvaluationStatus(ai_res.evaluation_status)
+                        grading_source = GradingSource.AI
+                        feedback = ai_res.student_feedback
+
+                        require_teacher_review = getattr(settings, "AI_GRADING_REQUIRE_TEACHER_REVIEW", False)
+
+                        if ai_res.evaluation_status == "completed" and not require_teacher_review:
+                            status = GradingStatus.GRADED
+                            awarded = ai_res.suggested_marks
+                            graded_at = datetime.now(timezone.utc)
+                            obtained_marks += awarded
+                            if awarded == marks_available:
+                                correctness = CorrectnessStatus.CORRECT
+                                correct_count += 1
+                            elif awarded == Decimal("0.00"):
+                                correctness = CorrectnessStatus.INCORRECT
+                                incorrect_count += 1
+                            else:
+                                correctness = CorrectnessStatus.CORRECT
+                        else:
+                            # Low confidence, failure, ambiguous reference, or review policy required
+                            status = GradingStatus.PENDING
+                            correctness = CorrectnessStatus.PENDING
+                            awarded = Decimal("0.00")
+                            pending_count += 1
+                            graded_at = None
+                    else:
+                        # Fallback when AI grading is disabled
+                        status = GradingStatus.PENDING
+                        correctness = CorrectnessStatus.PENDING
+                        awarded = Decimal("0.00")
+                        pending_count += 1
+                        graded_at = None
+                        grading_source = GradingSource.OBJECTIVE
+                        ai_eval_status = AiEvaluationStatus.NONE
+                        ai_suggested = None
+                        ai_conf = None
+                        ai_expl = None
+                        ai_eval_dict = None
+                        feedback = None
 
                 question_evaluations.append({
                     "assessment_question_id": aq.assessment_question_id,
@@ -1729,7 +1864,14 @@ class AssessmentService:
                     "marks_awarded": awarded,
                     "correctness": correctness,
                     "grading_status": status,
-                    "feedback": None,
+                    "feedback": feedback,
+                    "grading_source": grading_source,
+                    "ai_evaluation_status": ai_eval_status,
+                    "ai_suggested_marks": ai_suggested,
+                    "ai_confidence": ai_conf,
+                    "ai_explanation": ai_expl,
+                    "ai_evaluation": ai_eval_dict,
+                    "teacher_reviewed": False,
                     "graded_by": None,
                     "graded_at": graded_at
                 })
@@ -1782,6 +1924,13 @@ class AssessmentService:
                 correctness=qe["correctness"],
                 grading_status=qe["grading_status"],
                 feedback=qe["feedback"],
+                grading_source=qe.get("grading_source", GradingSource.OBJECTIVE),
+                ai_evaluation_status=qe.get("ai_evaluation_status", AiEvaluationStatus.NONE),
+                ai_suggested_marks=qe.get("ai_suggested_marks"),
+                ai_confidence=qe.get("ai_confidence"),
+                ai_explanation=qe.get("ai_explanation"),
+                ai_evaluation=qe.get("ai_evaluation"),
+                teacher_reviewed=qe.get("teacher_reviewed", False),
                 graded_by=qe["graded_by"],
                 graded_at=qe["graded_at"]
             )
@@ -1828,6 +1977,8 @@ class AssessmentService:
         if not result:
             result = await self.evaluate_attempt(attempt_id)
 
+        is_student = (attempt.attempt_student_id == requesting_user_id)
+
         questions = await self.repo.list_assessment_questions(assessment_id)
         rq_map = {rq.result_question_assessment_question_id: rq for rq in (result.question_results or [])}
 
@@ -1848,6 +1999,18 @@ class AssessmentService:
                     )
                 )
 
+            # Privileged AI evaluation metadata: omitted for students
+            ai_expl = rq.result_question_ai_explanation if (rq and not is_student) else None
+            ai_eval = rq.result_question_ai_evaluation if (rq and not is_student) else None
+            ai_conf = rq.result_question_ai_confidence if (rq and not is_student) else None
+            ai_sugg = rq.result_question_ai_suggested_marks if (rq and not is_student) else None
+
+            # Student feedback message
+            student_feedback_out = rq.result_question_feedback if rq else None
+            if is_student and rq and (rq.result_question_grading_status == GradingStatus.PENDING or rq.result_question_correctness == CorrectnessStatus.PENDING):
+                if not student_feedback_out:
+                    student_feedback_out = "Your response is currently under instructor review."
+
             formatted_q_results.append(
                 AssessmentResultQuestionResponse(
                     result_question_id=rq.result_question_id if rq else uuid.uuid4(),
@@ -1855,14 +2018,21 @@ class AssessmentService:
                     order=q.assessment_question_order,
                     question_type=QuestionType(snapshot.get("question_type", "mcq_single")),
                     question_text=snapshot.get("question_text", ""),
-                    question_explanation=snapshot.get("question_explanation"),
+                    question_explanation=snapshot.get("question_explanation") if not is_student else None,
                     options=options_data,
                     answer_value=rq.result_question_answer_value if rq else None,
                     marks_available=rq.result_question_marks_available if rq else q.assessment_question_marks,
                     marks_awarded=rq.result_question_marks_awarded if rq else Decimal("0.00"),
                     correctness=rq.result_question_correctness if rq else CorrectnessStatus.UNANSWERED,
                     grading_status=rq.result_question_grading_status if rq else GradingStatus.GRADED,
-                    feedback=rq.result_question_feedback if rq else None,
+                    feedback=student_feedback_out,
+                    grading_source=rq.result_question_grading_source if rq else GradingSource.OBJECTIVE,
+                    ai_evaluation_status=rq.result_question_ai_evaluation_status if rq else AiEvaluationStatus.NONE,
+                    ai_suggested_marks=ai_sugg,
+                    ai_confidence=ai_conf,
+                    ai_explanation=ai_expl,
+                    ai_evaluation=ai_eval,
+                    teacher_reviewed=rq.result_question_teacher_reviewed if rq else False,
                     graded_by=rq.result_question_graded_by if rq else None,
                     graded_at=rq.result_question_graded_at if rq else None
                 )
@@ -1932,10 +2102,12 @@ class AssessmentService:
         if not rq:
             raise NotFoundException("Question evaluation record not found for this attempt.")
 
-        # Update question evaluation
+        # Update question evaluation with teacher override
         rq.result_question_marks_awarded = payload.marks_awarded
         rq.result_question_feedback = payload.feedback
         rq.result_question_grading_status = GradingStatus.GRADED
+        rq.result_question_grading_source = GradingSource.TEACHER
+        rq.result_question_teacher_reviewed = True
         rq.result_question_graded_by = grader_user_id
         rq.result_question_graded_at = datetime.now(timezone.utc)
 
@@ -1948,8 +2120,115 @@ class AssessmentService:
 
         await self.db.flush()
 
-        # Recalculate result
-        refreshed_result = await self.repo.get_result_by_id(result.result_id)
+        return await self._recalculate_and_return_result(
+            result_id=result.result_id,
+            assessment=assessment,
+            org_id=org_id,
+            assessment_id=assessment_id,
+            attempt_id=attempt_id,
+            grader_user_id=grader_user_id,
+            is_org_admin=is_org_admin
+        )
+
+    async def approve_ai_grade(
+        self,
+        org_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        question_id: uuid.UUID,
+        grader_user_id: uuid.UUID,
+        is_org_admin: bool,
+        payload: Optional[TeacherApproveGradeInput] = None
+    ) -> AssessmentResultResponse:
+        """Approve an AI-suggested grade and finalize it with teacher review tracking."""
+        assessment, subject, workspace = await self._verify_assessment_hierarchy(assessment_id, org_id)
+        await self._verify_teacher_or_admin(
+            grader_user_id,
+            org_id,
+            subject.subject_id,
+            workspace.workspace_id,
+            is_org_admin
+        )
+
+        attempt = await self.repo.get_attempt_by_id(attempt_id)
+        if not attempt or attempt.attempt_assessment_id != assessment_id:
+            raise NotFoundException("Assessment attempt not found.")
+
+        if attempt.attempt_status == AttemptStatus.IN_PROGRESS:
+            raise ConflictException("Cannot approve grade for an in-progress attempt.")
+
+        result = await self.evaluate_attempt(attempt_id)
+
+        aq = await self.repo.get_assessment_question_by_id(question_id)
+        if not aq or aq.assessment_question_assessment_id != assessment_id:
+            raise NotFoundException("Assessment question not found.")
+
+        rq = await self.repo.get_result_question(result.result_id, question_id)
+        if not rq:
+            raise NotFoundException("Question evaluation record not found for this attempt.")
+
+        # Determine marks awarded: either payload override or AI suggested marks
+        if payload and payload.marks_awarded is not None:
+            awarded = payload.marks_awarded
+        elif rq.result_question_ai_suggested_marks is not None:
+            awarded = rq.result_question_ai_suggested_marks
+        else:
+            awarded = rq.result_question_marks_awarded
+
+        if awarded > rq.result_question_marks_available:
+            raise ValidationException(
+                f"Marks awarded ({awarded}) cannot exceed available question marks ({rq.result_question_marks_available})."
+            )
+
+        # Determine feedback
+        if payload and payload.feedback is not None:
+            feedback = payload.feedback
+        elif rq.result_question_feedback:
+            feedback = rq.result_question_feedback
+        elif rq.result_question_ai_evaluation and rq.result_question_ai_evaluation.get("student_feedback"):
+            feedback = rq.result_question_ai_evaluation.get("student_feedback")
+        else:
+            feedback = None
+
+        rq.result_question_marks_awarded = awarded
+        rq.result_question_feedback = feedback
+        rq.result_question_grading_status = GradingStatus.GRADED
+        rq.result_question_grading_source = GradingSource.TEACHER
+        rq.result_question_teacher_reviewed = True
+        rq.result_question_graded_by = grader_user_id
+        rq.result_question_graded_at = datetime.now(timezone.utc)
+
+        if awarded == rq.result_question_marks_available:
+            rq.result_question_correctness = CorrectnessStatus.CORRECT
+        elif awarded == Decimal("0.00"):
+            rq.result_question_correctness = CorrectnessStatus.INCORRECT
+        else:
+            rq.result_question_correctness = CorrectnessStatus.CORRECT
+
+        await self.db.flush()
+
+        return await self._recalculate_and_return_result(
+            result_id=result.result_id,
+            assessment=assessment,
+            org_id=org_id,
+            assessment_id=assessment_id,
+            attempt_id=attempt_id,
+            grader_user_id=grader_user_id,
+            is_org_admin=is_org_admin
+        )
+
+    async def _recalculate_and_return_result(
+        self,
+        result_id: uuid.UUID,
+        assessment: Assessment,
+        org_id: uuid.UUID,
+        assessment_id: uuid.UUID,
+        attempt_id: uuid.UUID,
+        grader_user_id: uuid.UUID,
+        is_org_admin: bool
+    ) -> AssessmentResultResponse:
+        """Recalculate assessment result aggregates after teacher grading or override."""
+        refreshed_result = await self.repo.get_result_by_id(result_id)
         question_results = refreshed_result.question_results if refreshed_result else []
 
         new_obtained = sum((q.result_question_marks_awarded for q in question_results), Decimal("0.00"))

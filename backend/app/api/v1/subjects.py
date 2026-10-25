@@ -399,3 +399,6 @@ async def get_subject_class_performance(
 from app.api.v1.materials import router as materials_router
 router.include_router(materials_router, prefix="/{subject_id}/materials", tags=["Subject Materials"])
 
+from app.api.v1.question_papers import router as qp_router
+router.include_router(qp_router, prefix="/{subject_id}/question-paper-drafts", tags=["Question Paper Generator"])
+

@@ -114,19 +114,32 @@ class VectorStoreService:
         organization_id: uuid.UUID,
         workspace_id: uuid.UUID,
         subject_id: uuid.UUID,
-        top_k: int = 5
+        top_k: int = 5,
+        material_ids: Optional[List[uuid.UUID]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform vector similarity search with strict tenant isolation metadata filtering.
+
+        Args:
+            material_ids: When provided, restricts results to only these specific
+                          materials (must belong to the specified subject). Used by
+                          the question paper generator to enforce selected-material-only
+                          retrieval. Each ID is validated server-side before this call.
         """
-        # Strict tenant boundary filter
-        where_filter = {
-            "$and": [
-                {"organization_id": str(organization_id)},
-                {"workspace_id": str(workspace_id)},
-                {"subject_id": str(subject_id)},
-            ]
-        }
+        # Strict tenant boundary filter — always applied
+        tenant_conditions: List[Dict[str, Any]] = [
+            {"organization_id": str(organization_id)},
+            {"workspace_id": str(workspace_id)},
+            {"subject_id": str(subject_id)},
+        ]
+
+        # Optional material-scoped filter for question paper generation
+        if material_ids:
+            # ChromaDB $in operator: match any of the listed material IDs
+            material_id_strs = [str(mid) for mid in material_ids]
+            tenant_conditions.append({"material_id": {"$in": material_id_strs}})
+
+        where_filter = {"$and": tenant_conditions}
 
         try:
             results = self._collection.query(

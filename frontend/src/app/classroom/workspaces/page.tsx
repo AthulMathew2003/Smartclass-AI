@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, Suspense } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   fetchWorkspaces,
   createWorkspace,
@@ -11,6 +12,7 @@ import {
 } from "@/lib/workspaces";
 import { usePermissions } from "@/lib/permissions";
 import ForbiddenState from "../components/ForbiddenState";
+import WorkspaceStudentsDrawer from "./components/WorkspaceStudentsDrawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -32,7 +34,9 @@ import {
   DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
 
-export default function WorkspacesPage() {
+function WorkspacesContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { hasPermission, isLoaded: permLoaded, orgId } = usePermissions();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -64,6 +68,28 @@ export default function WorkspacesPage() {
   // Submission spinner state
   const [submitting, setSubmitting] = useState(false);
 
+  // Student Directory Drawer State
+  const [drawerWorkspace, setDrawerWorkspace] = useState<Workspace | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const handleOpenStudents = (ws: Workspace) => {
+    setDrawerWorkspace(ws);
+    setDrawerOpen(true);
+    const params = new URLSearchParams(window.location.search);
+    params.set("students", ws.workspace_id);
+    router.replace(`?${params.toString()}`, { scroll: false });
+  };
+
+  const handleCloseStudents = (open: boolean) => {
+    setDrawerOpen(open);
+    if (!open) {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("students");
+      const newQuery = params.toString();
+      router.replace(newQuery ? `?${newQuery}` : window.location.pathname, { scroll: false });
+    }
+  };
+
   // Load Workspaces for Active Organization
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -83,6 +109,18 @@ export default function WorkspacesPage() {
       loadData();
     }
   }, [permLoaded, orgId, loadData]);
+
+  // Synchronize ?students=<id> query parameter with drawer state
+  useEffect(() => {
+    const studentWsId = searchParams.get("students");
+    if (studentWsId && workspaces.length > 0) {
+      const found = workspaces.find((w) => w.workspace_id === studentWsId);
+      if (found) {
+        setDrawerWorkspace(found);
+        setDrawerOpen(true);
+      }
+    }
+  }, [searchParams, workspaces]);
 
   // ── Permission Guard ──────────────────────────────────────
   if (!permLoaded) {
@@ -346,6 +384,7 @@ export default function WorkspacesPage() {
                 <div className="w-3/4 h-5 rounded bg-[var(--surface-container-high)]" />
                 <div className="w-full h-4 rounded bg-[var(--surface-container-high)]" />
               </div>
+              <div className="h-12 rounded-2xl bg-[var(--surface-container-high)]" />
               <div className="pt-4 border-t border-[var(--outline-variant)]/20 flex justify-between">
                 <div className="w-20 h-4 rounded bg-[var(--surface-container-high)]" />
                 <div className="w-24 h-4 rounded bg-[var(--surface-container-high)]" />
@@ -441,20 +480,31 @@ export default function WorkspacesPage() {
                       </Badge>
 
                       {/* Dropdown Menu for Actions */}
-                      {(canUpdate || canDelete) && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              className="p-1.5 rounded-xl hover:bg-[var(--surface-container-high)] transition-colors cursor-pointer text-[var(--on-surface-variant)]"
-                              title="Workspace Actions"
-                            >
-                              <span className="material-symbols-outlined text-[20px]">
-                                more_vert
-                              </span>
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48">
-                            {canUpdate && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="p-1.5 rounded-xl hover:bg-[var(--surface-container-high)] transition-colors cursor-pointer text-[var(--on-surface-variant)]"
+                            title="Workspace Actions"
+                          >
+                            <span className="material-symbols-outlined text-[20px]">
+                              more_vert
+                            </span>
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem
+                            onClick={() => handleOpenStudents(ws)}
+                            className="cursor-pointer gap-2"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              school
+                            </span>
+                            View Students
+                          </DropdownMenuItem>
+
+                          {canUpdate && (
+                            <>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem
                                 onClick={() => handleOpenEdit(ws)}
                                 className="cursor-pointer gap-2"
@@ -464,40 +514,40 @@ export default function WorkspacesPage() {
                                 </span>
                                 Edit Workspace
                               </DropdownMenuItem>
-                            )}
+                            </>
+                          )}
 
-                            {canDelete && !isArchived && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => handleOpenArchive(ws)}
-                                  className="cursor-pointer gap-2 text-amber-600 dark:text-amber-400 focus:text-amber-600"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">
-                                    archive
-                                  </span>
-                                  Archive Workspace
-                                </DropdownMenuItem>
-                              </>
-                            )}
+                          {canDelete && !isArchived && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleOpenArchive(ws)}
+                                className="cursor-pointer gap-2 text-amber-600 dark:text-amber-400 focus:text-amber-600"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  archive
+                                </span>
+                                Archive Workspace
+                              </DropdownMenuItem>
+                            </>
+                          )}
 
-                            {canUpdate && isArchived && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => handleUnarchive(ws)}
-                                  className="cursor-pointer gap-2 text-emerald-600 dark:text-emerald-400 focus:text-emerald-600"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">
-                                    unarchive
-                                  </span>
-                                  Unarchive Workspace
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
+                          {canUpdate && isArchived && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleUnarchive(ws)}
+                                className="cursor-pointer gap-2 text-emerald-600 dark:text-emerald-400 focus:text-emerald-600"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">
+                                  unarchive
+                                </span>
+                                Unarchive Workspace
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
 
@@ -509,11 +559,39 @@ export default function WorkspacesPage() {
                     {ws.workspace_name}
                   </h3>
                   <p
-                    className="text-xs leading-relaxed line-clamp-2 min-h-[2.25rem] mb-6"
+                    className="text-xs leading-relaxed line-clamp-2 min-h-[2.25rem] mb-4"
                     style={{ color: "var(--on-surface-variant)" }}
                   >
                     {ws.workspace_description || "No description provided."}
                   </p>
+
+                  {/* Enrolled Students Metric Box & Action */}
+                  <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[var(--surface-container-low)] border border-[var(--outline-variant)]/20 mb-4 transition-colors group-hover:border-[var(--primary)]/30">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[18px]">school</span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--on-surface-variant)] truncate">
+                          Students
+                        </div>
+                        <div className="text-sm font-bold text-[var(--on-surface)] leading-tight truncate">
+                          {ws.student_count ?? 0} {ws.student_count === 1 ? "student" : "students"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenStudents(ws)}
+                      className="h-8 px-2.5 sm:px-3 rounded-xl text-xs font-bold gap-1 text-[var(--primary)] border-[var(--primary)]/30 hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] transition-all cursor-pointer shrink-0 shadow-2xs"
+                    >
+                      <span>View Students</span>
+                      <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Card Footer Meta */}
@@ -767,6 +845,30 @@ export default function WorkspacesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Workspace Students Directory Drawer ─────────────────── */}
+      <WorkspaceStudentsDrawer
+        workspace={drawerWorkspace}
+        open={drawerOpen}
+        onOpenChange={handleCloseStudents}
+      />
     </div>
+  );
+}
+
+export default function WorkspacesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-[50vh]">
+          <div className="flex items-center gap-3 text-sm font-semibold text-[var(--on-surface-variant)]">
+            <div className="w-6 h-6 border-2 border-t-transparent border-[var(--primary)] rounded-full animate-spin" />
+            Loading workspaces...
+          </div>
+        </div>
+      }
+    >
+      <WorkspacesContent />
+    </Suspense>
   );
 }

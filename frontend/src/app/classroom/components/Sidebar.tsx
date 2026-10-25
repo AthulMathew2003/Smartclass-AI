@@ -104,43 +104,61 @@ export default function Sidebar({ status }: { status: OnboardingStatusResponse |
 
       {/* Navigation — permission-aware */}
       <nav className={`flex-1 space-y-1 mt-2 ${collapsed ? "px-2" : "px-3"}`}>
-        {visibleItems.map((item) => {
-          const isActive = pathname === item.href || (item.href !== "/classroom" && pathname.startsWith(item.href));
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={`flex items-center gap-3 py-3 rounded-xl font-semibold text-[13px] transition-all duration-200 ${
-                collapsed ? "px-3 justify-center" : "px-4"
-              } ${
-                isActive
-                  ? "translate-x-0.5"
-                  : "cursor-pointer"
-              }`}
-              style={{
-                backgroundColor: isActive ? "var(--tertiary-fixed)" : "transparent",
-                color: isActive
-                  ? "var(--on-tertiary-fixed)"
-                  : "rgba(255,255,255,0.65)",
-              }}
-              onMouseEnter={e => {
-                if (!isActive) {
-                  e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.08)";
-                  e.currentTarget.style.color = "rgba(255,255,255,0.9)";
-                }
-              }}
-              onMouseLeave={e => {
-                if (!isActive) {
-                  e.currentTarget.style.backgroundColor = "transparent";
-                  e.currentTarget.style.color = "rgba(255,255,255,0.65)";
-                }
-              }}
-            >
-              <span className="material-symbols-outlined text-[20px] shrink-0">{item.icon}</span>
-              {!collapsed && <span className="truncate">{item.name}</span>}
-            </Link>
-          );
-        })}
+        {(() => {
+          const currentPath = pathname ? (pathname.replace(/\/+$/, "") || "/") : "";
+          // Determine the single active item with the most specific (longest) matching href.
+          // This prevents parent routes (like /classroom/settings) from staying highlighted
+          // when a more specific child nav item (like /classroom/settings/roles) is active.
+          const activeItem = visibleItems
+            .filter((item) => {
+              if (item.href === "/classroom") {
+                return currentPath === "/classroom";
+              }
+              if (item.href === "/classroom/settings/roles" && currentPath === "/classroom/roles") {
+                return true;
+              }
+              return currentPath === item.href || currentPath.startsWith(`${item.href}/`);
+            })
+            .sort((a, b) => b.href.length - a.href.length)[0];
+
+          return visibleItems.map((item) => {
+            const isActive = activeItem?.href === item.href;
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={`flex items-center gap-3 py-3 rounded-xl font-semibold text-[13px] transition-all duration-200 ${
+                  collapsed ? "px-3 justify-center" : "px-4"
+                } ${
+                  isActive
+                    ? "translate-x-0.5"
+                    : "cursor-pointer"
+                }`}
+                style={{
+                  backgroundColor: isActive ? "var(--tertiary-fixed)" : "transparent",
+                  color: isActive
+                    ? "var(--on-tertiary-fixed)"
+                    : "rgba(255,255,255,0.65)",
+                }}
+                onMouseEnter={e => {
+                  if (!isActive) {
+                    e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.08)";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.9)";
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isActive) {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.65)";
+                  }
+                }}
+              >
+                <span className="material-symbols-outlined text-[20px] shrink-0">{item.icon}</span>
+                {!collapsed && <span className="truncate">{item.name}</span>}
+              </Link>
+            );
+          });
+        })()}
       </nav>
 
       {/* Footer status */}

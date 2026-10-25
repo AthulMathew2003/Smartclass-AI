@@ -7,6 +7,7 @@ import {
   AssessmentResultQuestion,
   fetchAttemptResult,
   gradeAssessmentQuestion,
+  approveAssessmentQuestionGrade,
   ManualGradeInput,
 } from "@/lib/assessments";
 import { usePermissions } from "@/lib/permissions";
@@ -34,6 +35,7 @@ export default function AssessmentAttemptResultPage({
   const [result, setResult] = useState<AssessmentResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [approvingQuestionId, setApprovingQuestionId] = useState<string | null>(null);
 
   // Manual grading state for teachers
   const [gradingDrafts, setGradingDrafts] = useState<
@@ -51,8 +53,8 @@ export default function AssessmentAttemptResultPage({
       const drafts: Record<string, { marks: string; feedback: string }> = {};
       data.questions.forEach((q) => {
         drafts[q.assessment_question_id] = {
-          marks: String(q.marks_awarded ?? "0"),
-          feedback: q.feedback || "",
+          marks: String(q.marks_awarded ?? q.ai_suggested_marks ?? "0"),
+          feedback: q.feedback || q.ai_evaluation?.student_feedback || "",
         };
       });
       setGradingDrafts(drafts);
@@ -66,6 +68,34 @@ export default function AssessmentAttemptResultPage({
   useEffect(() => {
     loadResult();
   }, [assessmentId, attemptId]);
+
+  const handleApproveGrade = async (questionId: string) => {
+    try {
+      setApprovingQuestionId(questionId);
+      const updated = await approveAssessmentQuestionGrade(assessmentId, attemptId, questionId);
+      setResult(updated);
+      const updatedQ = updated.questions.find((q) => q.assessment_question_id === questionId);
+      setGradingDrafts((prev) => ({
+        ...prev,
+        [questionId]: {
+          marks: String(updatedQ?.marks_awarded ?? "0"),
+          feedback: updatedQ?.feedback || "",
+          saving: false,
+          error: undefined,
+        },
+      }));
+    } catch (err: any) {
+      setGradingDrafts((prev) => ({
+        ...prev,
+        [questionId]: {
+          ...prev[questionId],
+          error: err.message || "Failed to approve grade.",
+        },
+      }));
+    } finally {
+      setApprovingQuestionId(null);
+    }
+  };
 
   const handleSaveGrade = async (questionId: string, marksAvailable: number | string) => {
     const draft = gradingDrafts[questionId];
@@ -135,13 +165,17 @@ export default function AssessmentAttemptResultPage({
         <span className="material-symbols-outlined text-[48px] text-red-500 block">error</span>
         <h2 className="text-xl font-bold text-[var(--on-surface)]">Result Unavailable</h2>
         <p className="text-sm text-[var(--on-surface-variant)]">{error || "Unable to load evaluation result."}</p>
-        <Button
-          onClick={() => router.push(`/classroom/assessments/${assessmentId}`)}
-          variant="outline"
-          className="mt-2"
-        >
-          Back to Assessment Overview
-        </Button>
+        <div className="flex items-center justify-center gap-3 mt-4">
+          <Button onClick={loadResult} variant="default">
+            Try Again
+          </Button>
+          <Button
+            onClick={() => router.push(`/classroom/assessments/${assessmentId}`)}
+            variant="outline"
+          >
+            Back to Assessment Overview
+          </Button>
+        </div>
       </div>
     );
   }
@@ -315,6 +349,26 @@ export default function AssessmentAttemptResultPage({
                     <span className="text-xs font-medium px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-600 capitalize">
                       {q.question_type.replace("_", " ")}
                     </span>
+                    {q.grading_source === "teacher" && (
+                      <Badge className="bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20 text-xs font-semibold">
+                        Teacher Finalized
+                      </Badge>
+                    )}
+                    {q.grading_source === "ai" && (
+                      <Badge className="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20 text-xs font-semibold">
+                        AI Evaluated
+                      </Badge>
+                    )}
+                    {q.grading_source === "objective" && (
+                      <Badge className="bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20 text-xs font-semibold">
+                        Auto Graded
+                      </Badge>
+                    )}
+                    {q.ai_evaluation_status === "review_required" && (
+                      <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20 text-xs font-semibold">
+                        Review Recommended
+                      </Badge>
+                    )}
                     {isQCorrect && (
                       <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-xs font-semibold">
                         Correct (+{parseFloat(String(q.marks_awarded)).toFixed(2)})
@@ -397,7 +451,8 @@ export default function AssessmentAttemptResultPage({
 
                 {/* Short Answer Review */}
                 {q.question_type === "short_answer" && (
-                  <div className="space-y-3 pt-1">
+                  <div className="space-y-4 pt-1">
+                    {/* Student response */}
                     <div className="bg-[var(--surface-container-low)] border border-[var(--outline-variant)] p-4 rounded-2xl">
                       <span className="text-xs text-[var(--on-surface-variant)] font-medium block mb-1">
                         Student Written Response:
@@ -411,13 +466,130 @@ export default function AssessmentAttemptResultPage({
                       )}
                     </div>
 
-                    {/* Teacher Feedback if already graded */}
+                    {/* Pending Review Notice for Student */}
+                    {isQPending && !canGrade && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                        <span className="material-symbols-outlined text-[18px]">hourglass_empty</span>
+                        <span>This response is currently under instructor review. Your final score will be updated once evaluated.</span>
+                      </div>
+                    )}
+
+                    {/* Teacher / Official Feedback */}
                     {q.feedback && (
                       <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-2xl text-xs sm:text-sm">
                         <span className="font-bold text-blue-700 dark:text-blue-300 block mb-1 flex items-center gap-1">
-                          <span className="material-symbols-outlined text-[16px]">comment</span> Teacher Feedback:
+                          <span className="material-symbols-outlined text-[16px]">comment</span> Feedback:
                         </span>
                         <p className="text-[var(--on-surface)] whitespace-pre-wrap">{q.feedback}</p>
+                      </div>
+                    )}
+
+                    {/* Teacher-only AI Evaluation Breakdown Card */}
+                    {canGrade && (q.ai_evaluation || q.ai_suggested_marks !== null && q.ai_suggested_marks !== undefined) && (
+                      <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-2xl p-4 sm:p-5 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-500/10 pb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-[20px] text-indigo-600 dark:text-indigo-400">
+                              auto_awesome
+                            </span>
+                            <span className="font-bold text-sm text-[var(--on-surface)]">
+                              AI Semantic Evaluation
+                            </span>
+                            {q.ai_confidence !== null && q.ai_confidence !== undefined && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[11px] font-semibold ${
+                                  q.ai_confidence >= 0.7
+                                    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20"
+                                    : "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20"
+                                }`}
+                              >
+                                {Math.round(q.ai_confidence * 100)}% Confidence
+                              </Badge>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-[var(--on-surface-variant)]">Suggested:</span>
+                            <span className="font-black text-sm text-indigo-700 dark:text-indigo-300">
+                              {parseFloat(String(q.ai_suggested_marks ?? q.ai_evaluation?.suggested_marks ?? 0)).toFixed(2)} / {parseFloat(String(q.marks_available)).toFixed(2)} pts
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Review Recommended Banner */}
+                        {(q.ai_evaluation?.review_recommended || q.ai_evaluation_status === "review_required") && (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
+                            <span className="material-symbols-outlined text-[16px] text-amber-600">flag</span>
+                            <span className="font-medium">
+                              Review Recommended: AI flagged this answer for manual instructor review due to borderline score or uncertainty.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Rationale / Explanation */}
+                        {(q.ai_explanation || q.ai_evaluation?.explanation) && (
+                          <div className="text-xs text-[var(--on-surface-variant)] leading-relaxed">
+                            <span className="font-bold text-[var(--on-surface)]">Grading Rationale: </span>
+                            {q.ai_explanation || q.ai_evaluation?.explanation}
+                          </div>
+                        )}
+
+                        {/* Strengths & Missing Concepts Grid */}
+                        {q.ai_evaluation && ((q.ai_evaluation.strengths?.length ?? 0) > 0 || (q.ai_evaluation.missing_concepts?.length ?? 0) > 0) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            {q.ai_evaluation.strengths && q.ai_evaluation.strengths.length > 0 && (
+                              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-xs space-y-1">
+                                <span className="font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
+                                  <span className="material-symbols-outlined text-[14px]">thumb_up</span> Strengths:
+                                </span>
+                                <ul className="list-disc list-inside space-y-0.5 text-emerald-950 dark:text-emerald-200">
+                                  {q.ai_evaluation.strengths.map((str, i) => (
+                                    <li key={i}>{str}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {q.ai_evaluation.missing_concepts && q.ai_evaluation.missing_concepts.length > 0 && (
+                              <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 text-xs space-y-1">
+                                <span className="font-bold text-red-800 dark:text-red-300 flex items-center gap-1">
+                                  <span className="material-symbols-outlined text-[14px]">error_outline</span> Missing / Inaccurate:
+                                </span>
+                                <ul className="list-disc list-inside space-y-0.5 text-red-950 dark:text-red-200">
+                                  {q.ai_evaluation.missing_concepts.map((mis, i) => (
+                                    <li key={i}>{mis}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Quick Approve Button */}
+                        <div className="flex items-center justify-between pt-2">
+                          <span className="text-[11px] text-[var(--on-surface-variant)]">
+                            {q.grading_source === "teacher"
+                              ? "A teacher has customized this grade."
+                              : q.grading_source === "ai"
+                              ? "AI suggested grade currently applied."
+                              : "Pending teacher approval."}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={approvingQuestionId === q.assessment_question_id}
+                            onClick={() => handleApproveGrade(q.assessment_question_id)}
+                            className="text-xs h-8 border-indigo-500/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/10"
+                          >
+                            {approvingQuestionId === q.assessment_question_id ? (
+                              <div className="w-3 h-3 border-2 border-t-transparent border-indigo-600 rounded-full animate-spin mr-1.5" />
+                            ) : (
+                              <span className="material-symbols-outlined text-[14px] mr-1">check_circle</span>
+                            )}
+                            {q.grading_source === "teacher" ? "Re-Approve AI Grade" : "Approve AI Grade"}
+                          </Button>
+                        </div>
                       </div>
                     )}
 
@@ -427,7 +599,7 @@ export default function AssessmentAttemptResultPage({
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-[var(--on-surface)] flex items-center gap-1.5">
                             <span className="material-symbols-outlined text-[16px] text-[var(--primary)]">edit_note</span>
-                            {q.grading_status === "graded" ? "Update Grade / Regrade" : "Enter Manual Grade"}
+                            {q.grading_source === "teacher" ? "Override Grade / Regrade" : "Finalize / Override Grade"}
                           </span>
                           <span className="text-xs text-[var(--on-surface-variant)]">
                             Max: {parseFloat(String(q.marks_available)).toFixed(2)} pts

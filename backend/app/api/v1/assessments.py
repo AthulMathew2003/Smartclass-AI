@@ -26,6 +26,7 @@ from app.modules.assessments.schemas import (
     AssessmentAttemptSummaryResponse,
     StudentAttemptAnswerInput,
     ManualGradeInput,
+    TeacherApproveGradeInput,
     AssessmentResultResponse,
     TeacherAssessmentResultSummaryResponse,
     AssessmentAnalyticsResponse,
@@ -711,6 +712,33 @@ async def grade_attempt_question(
     service = AssessmentService(db)
     is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
     res = await service.grade_question(
+        org_id=org.organization_id,
+        assessment_id=assessment_id,
+        attempt_id=attempt_id,
+        question_id=question_id,
+        grader_user_id=current_user.user_id,
+        is_org_admin=is_org_admin,
+        payload=payload
+    )
+    await db.commit()
+    return res
+
+
+@router.put("/{assessment_id}/attempts/{attempt_id}/questions/{question_id}/approve", response_model=AssessmentResultResponse)
+async def approve_attempt_question_grade(
+    assessment_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+    question_id: uuid.UUID,
+    payload: Optional[TeacherApproveGradeInput] = None,
+    current_user: User = Depends(get_current_user),
+    org: Organization = Depends(get_current_organization),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(AssessmentPermission.UPDATE))
+):
+    """Approve an AI-suggested grade for a subjective question and finalize it as teacher-approved."""
+    service = AssessmentService(db)
+    is_org_admin = await service.repo.is_user_org_admin(current_user.user_id, org.organization_id)
+    res = await service.approve_ai_grade(
         org_id=org.organization_id,
         assessment_id=assessment_id,
         attempt_id=attempt_id,

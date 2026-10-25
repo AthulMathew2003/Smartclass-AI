@@ -11,7 +11,32 @@ export interface Workspace {
   workspace_created_at: string;
   workspace_updated_at: string;
   member_count?: number;
+  student_count?: number;
   subject_count?: number;
+}
+
+export interface WorkspaceStudent {
+  id: string;
+  name: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  status: string;
+  joined_at: string | null;
+}
+
+export interface WorkspaceStudentsResponse {
+  success: boolean;
+  message: string;
+  data: {
+    items: WorkspaceStudent[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  };
+  request_id?: string | null;
 }
 
 export interface WorkspaceMemberItem {
@@ -67,3 +92,22 @@ export async function archiveWorkspace(workspaceId: string): Promise<Workspace> 
 export async function fetchWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberItem[]> {
   return await apiFetch<WorkspaceMemberItem[]>(`/workspaces/${workspaceId}/members`);
 }
+
+export async function fetchWorkspaceStudents(
+  workspaceId: string,
+  params?: {
+    search?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<WorkspaceStudentsResponse> {
+  const query = new URLSearchParams();
+  if (params?.search && params.search.trim()) query.set("search", params.search.trim());
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.page_size) query.set("page_size", String(params.page_size));
+
+  const qs = query.toString();
+  const endpoint = `/workspaces/${workspaceId}/students${qs ? `?${qs}` : ""}`;
+  return await apiFetch<WorkspaceStudentsResponse>(endpoint);
+}
+
